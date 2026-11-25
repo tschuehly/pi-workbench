@@ -30,7 +30,7 @@ const SEEDS = [["Library/Caches/ms-playwright", "ms-playwright"]];
 // Inside a granted repo: what would let a command run code later outside the fence or redirect the agent.
 const REPO_READ_ONLY = [".pi", "AGENTS.md", "AGENTS.override.md", ".mcp.json"];
 
-const inside = (path, root) => { const rel = relative(root, path); return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel); };
+export const inside = (path, root) => { const rel = relative(root, path); return rel !== "" && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel); };
 const real = (path) => { try { return realpathSync(path); } catch { return path; } };
 
 /** Only macOS is fenced; Linux machines are the agent VMs and CI, isolated as whole machines. */
@@ -347,15 +347,23 @@ export function mayWrite(path, { write, read = [], reopen = [], locked = [], his
  */
 export async function writeRefusal(path, { cwd, sessionId, env, rules }) {
   if (typeof path !== "string") return undefined;
-  const spellings = [path, path.replace(/^@/, "")].flatMap((p) => [p, p.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")]);
   rules ??= await writeGrants({ cwd, sessionId, env });
-  const target = [...new Set(spellings.map((p) => toolPath(p, { cwd, env })))].find((t) => !mayWrite(t, rules));
+  const target = toolPaths(path, { cwd, env }).find((t) => !mayWrite(t, rules));
   if (target === undefined) return undefined;
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
 }
 
 /** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */
 export const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
+
+/**
+ * Every absolute path a tool layer may make of the tool argument `path`: with and without a leading `@` and Unicode
+ * spaces made plain, each resolved as Durable does.
+ */
+export function toolPaths(path, at) {
+  const spellings = [path, path.replace(/^@/, "")].flatMap((p) => [p, p.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")]);
+  return [...new Set(spellings.map((p) => toolPath(p, at)))];
+}
 
 /** `p` as Durable's file tools resolve it (env/node.js resolvePath): `~`, `file://`, relative to `cwd`. */
 export function toolPath(p, { cwd, env }) {
@@ -404,10 +412,20 @@ export async function fencedWrite(path, content, { cwd, sessionId, env, rules, s
   });
   if (code === 0) return;
   if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
-  // The helper's own message names the cause; only a refusal by the fence is a fence block.
-  const cause = /Operation not permitted/.test(stderr) ? "EPERM" : /Is a directory/.test(stderr) ? "EISDIR" : /Not a directory/.test(stderr) ? "ENOTDIR" : /No such file/.test(stderr) ? "ENOENT" : "EIO";
+  throw writeError(stderr, path, code);
+}
+
+const CAUSES = { "Operation not permitted": "EPERM", "Permission denied": "EACCES", "Is a directory": "EISDIR", "Not a directory": "ENOTDIR", "No such file or directory": "ENOENT" };
+
+/**
+ * The helper's failure as an fs-style error. Its message ends `<file>: <reason>` (mkdir, sh), so the reason is the last
+ * line's text after the last ": ", never a file name; only the sandbox's EPERM is a fence block.
+ */
+export function writeError(stderr, path, code) {
+  const line = stderr.trim().split("\n").at(-1) ?? "";
+  const cause = CAUSES[line.slice(line.lastIndexOf(": ") + 2)] ?? "EIO";
   const detail = stderr.trim() || `exit ${code}`;
-  throw Object.assign(new Error(cause === "EPERM" ? `Blocked by the write fence: ${path} could not be written (${detail})` : `${path} could not be written (${detail})`), { code: cause });
+  return Object.assign(new Error(cause === "EPERM" ? `Blocked by the write fence: ${path} could not be written (${detail})` : `${path} could not be written (${detail})`), { code: cause });
 }
 
 /**

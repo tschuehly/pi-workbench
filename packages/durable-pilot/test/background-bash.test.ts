@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
-import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
+import { BackgroundBash, BashJobsDoc, outsideHome } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -627,9 +627,13 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 		// D13: the Chat's environment writes in the fence, so a folder swapped for a link after the approval leads nowhere.
 		mkdirSync(join(cwd, "sub"));
 		assert.equal(await bash.writeRefusal(join(cwd, "sub", "x.txt"), cwd, "lead" as never), undefined);
+		// Astra re-check of 2604454: one approval per call, under the path Durable writes (`@` stripped).
+		assert.equal(await bash.writeRefusal("@sub/x.txt", cwd, "lead" as never), undefined);
+		assert.ok(bash.takeApproval("lead" as never, join(cwd, "sub", "x.txt")), "each approval waits for its own write");
 		rmSync(join(cwd, "sub"), { recursive: true });
 		symlinkSync(away, join(cwd, "sub"));
 		const raced = await bash.env({ cwd, shellEnv: {} }, "lead" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+		assert.equal(bash.takeApproval("lead" as never, join(cwd, "sub", "x.txt")), undefined, "the write took the first");
 		assert.equal(raced.ok ? "written" : raced.error.code, "permission_denied");
 		assert.deepEqual(readdirSync(away), []);
 		await bash.fullAccess("on", "test", async () => true);
@@ -642,4 +646,17 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 		bash.close();
 		rmSync(away, { recursive: true, force: true });
 	}
+});
+
+// Runs inside a fence too: path checks only.
+test("codemode's temp folders write unfenced only outside home, by real path: a home subfolder named ..cache is inside", () => {
+	const home = join(ROOT, "fake-home");
+	mkdirSync(join(home, "..cache"), { recursive: true });
+	symlinkSync(join(home, "..cache"), join(ROOT, "alias-in-home"));
+	assert.equal(outsideHome(join(home, "..cache"), home), false);
+	assert.equal(outsideHome(join(ROOT, "alias-in-home"), home), false, "an alias resolves into home");
+	assert.equal(outsideHome(home, home), false);
+	assert.equal(outsideHome(join(ROOT, "jobs-elsewhere-missing"), home), false, "a folder that does not exist is never exempt");
+	mkdirSync(join(ROOT, "outside-home"));
+	assert.equal(outsideHome(join(ROOT, "outside-home"), home), true);
 });

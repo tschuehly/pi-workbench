@@ -9,7 +9,7 @@ import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, workstreamId, writeGrants, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeGrants, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -413,6 +413,14 @@ test("file-edit tools: a path is writable exactly where the Chat's commands coul
   assert.deepEqual(allowed, [], "each one refused");
   assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
   assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
+  // Astra re-check of 2604454: the path Durable writes (`@` stripped, spaces made plain) is among the approved ones.
+  assert.ok(toolPaths("@src/a\u00A0b.ts", { cwd: app, env }).includes(join(app, "src", "a b.ts")));
+  // The helper's reason is the text after a message's last ": ", never a file name; only EPERM is the fence.
+  const cause = (stderr) => { const e = writeError(stderr, "/x", 1); return [e.code, /write fence/.test(e.message)]; };
+  assert.deepEqual(cause("sh: /a/Operation not permitted/f: Is a directory\n"), ["EISDIR", false]);
+  assert.deepEqual(cause("sh: /a/f: Permission denied\n"), ["EACCES", false]);
+  assert.deepEqual(cause("mkdir: /a/Is a directory: Operation not permitted\n"), ["EPERM", true]);
+  assert.deepEqual(cause(""), ["EIO", false]);
 });
 
 // D13: the approval (writeRefusal, before the tool runs) does not bind the write; the write itself runs in the fence.
