@@ -8,7 +8,7 @@ import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, grants, ownedWorktrees, piWebSockets, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, workstreamId } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -317,9 +317,60 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   }
 });
 
-test("the socket deny rule covers PI WEB's data dir, its host-folder and sessiond-socket overrides, and the default", () => {
-  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "/x/data", PI_WEB_DURABLE_HOST_DIR: "/x/hosts", PI_WEB_SESSIOND_SOCKET: "/x/sd.sock" }, "/x/home"), ["/x/data", "/x/hosts", "/x/sd.sock", "/x/home/.pi-web-durable"]);
-  assert.deepEqual(piWebSockets({ PI_WEB_DURABLE_HOST_DIR: "" }, "/x/home"), ["/x/home/.pi-web-durable"]);
+test("the socket and read deny rules cover PI WEB's data dir override and both defaults, its host-folder and sessiond-socket overrides, relative ones resolved", () => {
+  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "/x/data", PI_WEB_DURABLE_HOST_DIR: "/x/hosts", PI_WEB_SESSIOND_SOCKET: "/x/sd.sock" }, "/x/home"), ["/x/data", "/x/home/.pi-web", "/x/home/.pi-web-durable", "/x/hosts", "/x/sd.sock"]);
+  assert.deepEqual(piWebSockets({ PI_WEB_DURABLE_HOST_DIR: "" }, "/x/home"), ["/x/home/.pi-web", "/x/home/.pi-web-durable"]);
+  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "rel/data" }, "/x/home")[0], join(realpathSync(process.cwd()), "rel", "data"));
+});
+
+test("the port deny rule covers PI WEB's web port (variable, config file, defaults) and the sessiond TCP port", () => {
+  const config = join(root, "pi-web-config.json");
+  writeFileSync(config, JSON.stringify({ port: 9100 }));
+  assert.deepEqual(piWebPorts({ PI_WEB_PORT: "9000", PI_WEB_CONFIG: config, PI_WEB_SESSIOND_PORT: "9200" }, "/x/home"), ["9000", "9100", "8504", "8506", "9200"]);
+  mkdirSync(join(root, "xdg", "pi-web"), { recursive: true });
+  writeFileSync(join(root, "xdg", "pi-web", "config.json"), JSON.stringify({ port: 9300 }));
+  assert.deepEqual(piWebPorts({ XDG_CONFIG_HOME: join(root, "xdg"), PI_WEB_SESSIOND_PORT: "0", PORT: "3000" }, "/x/home"), ["9300", "8504", "8506"]);
+});
+
+test("the Seatbelt profile denies PI WEB's ports and folders (connect and read) and inspecting processes outside the sandbox", () => {
+  const args = profile({ write: [], read: [], hidden: ["/x/home/.pi-web"], ports: ["8504", "9200"], sockets: ["/x/home/.pi-web"] });
+  const text = args[args.indexOf("-p") + 1];
+  // Paths enter as -D parameters: P0 the hidden folder, P1 the socket folder.
+  assert.deepEqual(args.slice(0, 4), ["-D", "P0=/x/home/.pi-web", "-D", "P1=/x/home/.pi-web"]);
+  assert.match(text, /\(deny network-outbound \(remote ip "\*:8504"\) \(remote ip "\*:9200"\)\)/);
+  assert.ok(text.includes('(deny file-read* (subpath (param "P0")))'), text);
+  assert.ok(text.includes('(deny network-outbound (remote unix-socket (subpath (param "P1"))))'), text);
+  assert.ok(text.indexOf("(deny process-info* (target others))") < text.indexOf("(allow process-info* (target same-sandbox))"), text);
+});
+
+test("fenced commands cannot read PI WEB's folders, reach its sessiond TCP port or config-file port, or inspect processes outside the sandbox (ps of their own children works)", { skip }, async () => {
+  const { createServer } = await import("node:net");
+  const { spawn } = await import("node:child_process");
+  const servers = [];
+  const listen = (where) => new Promise((resolve, reject) => { const server = createServer((socket) => socket.end("hello\n")); servers.push(server); server.once("error", reject); server.listen(where, () => resolve(server)); });
+  const outsider = spawn("sleep", ["30"], { stdio: "ignore" });
+  const config = join(root, "web-config.json");
+  for (const dir of [".pi-web/hosts", ".pi-web-durable/hosts"]) mkdirSync(join(home, dir), { recursive: true });
+  writeFileSync(join(home, ".pi-web", "hosts", "h.plist"), "nonce");
+  writeFileSync(join(home, ".pi-web-durable", "hosts", "h.plist"), "nonce");
+  try {
+    const sessiond = await listen(0);
+    const web = await listen(0);
+    writeFileSync(config, JSON.stringify({ port: web.address().port }));
+    const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
+    const read = (path) => `cat "${path}" >/dev/null 2>&1 && echo READ || echo UNREADABLE`;
+    const job = await run([
+      nc(`-w2 127.0.0.1 ${sessiond.address().port}`), nc(`-w2 localhost ${web.address().port}`),
+      read("$HOME/.pi-web/hosts/h.plist"), read("$HOME/.pi-web-durable/hosts/h.plist"),
+      `ps -o command= -p ${outsider.pid} 2>/dev/null | grep -q sleep && echo OUTSIDER_SEEN || echo OUTSIDER_HIDDEN`,
+      "sleep 5 & ps -o command= -p $! | grep -q sleep && echo CHILD_SEEN || echo CHILD_HIDDEN; kill $!",
+    ].join("; "), { env: { PI_WEB_SESSIOND_PORT: String(sessiond.address().port), PI_WEB_CONFIG: config } });
+    assert.equal(job.state, "complete", job.error);
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "UNREADABLE", "UNREADABLE", "OUTSIDER_HIDDEN", "CHILD_SEEN"]);
+  } finally {
+    outsider.kill();
+    for (const server of servers) server.close();
+  }
 });
 
 test("signals reach only the command's own processes: no SIGUSR1 opens an unfenced Node debugger", { skip }, async () => {

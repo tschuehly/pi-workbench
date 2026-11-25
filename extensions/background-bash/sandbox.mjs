@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Absolute: never a sandbox-exec found on the command's PATH. Codex and srt crash Chromium (Thomas chose this, 24 Nov).
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -138,7 +138,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
  * The Seatbelt profile: everything as today except writes, which only the grants get, and
  * reads of Thomas's private folders. Later rules win. Paths enter as -D parameters, never as profile text.
  */
-function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
+export function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
   const params = [];
   const p = (path) => { params.push(`-D`, `P${params.length / 2}=${path}`); return `(param "P${params.length / 2 - 1}")`; };
   const rules = [
@@ -173,6 +173,10 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
     // the hosts, PI WEB), which would run any code outside the fence.
     "(deny signal)",
     "(allow signal (target same-sandbox))",
+    // No inspecting processes outside this sandbox (ps of their arguments, lsof): a host's launch arguments hold its
+    // one-shot full-access nonce. Its own children share the sandbox and stay visible.
+    "(deny process-info* (target others))",
+    "(allow process-info* (target same-sandbox))",
   ];
   return [...params, "-p", rules.join("\n")];
 }
@@ -278,9 +282,28 @@ export function alreadyFenced() {
   } catch (error) { return error.code === "EPERM"; }
 }
 
-/** Every place PI WEB puts a socket: its data dir, and the host-folder and sessiond-socket overrides (pi-web sessiond.ts). */
-export const piWebSockets = (env, home) => [env.PI_WEB_DATA_DIR, env.PI_WEB_DURABLE_HOST_DIR, env.PI_WEB_SESSIOND_SOCKET, join(home, ".pi-web-durable")]
-  .filter((d) => typeof d === "string" && d !== "").map(real);
+const given = (value) => typeof value === "string" && value !== "";
+
+/**
+ * Every PI WEB folder and socket path: the data dir override and both stock defaults (~/.pi-web, the Durable instance's
+ * ~/.pi-web-durable), and the host-folder and sessiond-socket overrides (pi-web config.ts and sessiond.ts). PI WEB
+ * resolves a relative one against its daemon's folder and hands its hosts absolute values; a relative one here
+ * (another launcher) falls back to this runner's folder.
+ */
+export const piWebSockets = (env, home) => [...new Set([env.PI_WEB_DATA_DIR, join(home, ".pi-web"), join(home, ".pi-web-durable"), env.PI_WEB_DURABLE_HOST_DIR, env.PI_WEB_SESSIOND_SOCKET]
+  .filter(given).map((path) => real(resolve(path))))];
+
+/**
+ * PI WEB's TCP ports: its web/API port (PI_WEB_PORT, else its config file's `port`, and the stock 8504 and Durable 8506)
+ * and the sessiond port, which also serves the owner's unfenced shell route. Digits only: they enter the profile as text.
+ * shortcut: PORT (PI WEB's fallback) is left out, it names any dev server; and a port-0 sessiond (tests only) is unknown.
+ */
+export function piWebPorts(env, home) {
+  const config = given(env.PI_WEB_CONFIG) ? resolve(env.PI_WEB_CONFIG) : join(given(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : join(home, ".config"), "pi-web", "config.json");
+  let configured;
+  try { configured = JSON.parse(readFileSync(config, "utf8"))?.port; } catch { /* no config file: the defaults */ }
+  return [...new Set([env.PI_WEB_PORT, configured, "8504", "8506", env.PI_WEB_SESSIOND_PORT].map(String).filter((port) => /^\d{1,5}$/.test(port) && Number(port) > 0))];
+}
 
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
@@ -305,9 +328,12 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const cwd = real(job.cwd);
   const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
   const owners = [job.sessionId, started].filter((id) => typeof id === "string" && id !== "");
-  const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
+  const ports = piWebPorts(env, home);
   const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
-  const net = { ports, sockets: [...piWebSockets(env, home), join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
-  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
+  const piWeb = piWebSockets(env, home);
+  const net = { ports, sockets: [...piWeb, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
+  // PI WEB's folders are unreadable too: host plists, launch nonces and stores (never one holding home itself).
+  const hidden = [...rules.hidden, ...piWeb.filter((dir) => dir !== real(home) && !inside(real(home), dir))];
+  return { file: bin, args: sandboxArgs({ ...rules, hidden, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }
