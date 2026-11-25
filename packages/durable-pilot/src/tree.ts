@@ -38,7 +38,7 @@ function piEntry(entry: EntryRecord, parentId: string | null): TreeEntry | undef
 	return { ...base, type: "message", message: rest };
 }
 
-async function entries(conversation: Conversation): Promise<EntryRecord[]> {
+export async function entries(conversation: Conversation): Promise<EntryRecord[]> {
 	const found: EntryRecord[] = [];
 	let cursor: Parameters<Conversation["entries"]>[2];
 	do {
@@ -191,6 +191,17 @@ export function branchQuestions(history: readonly EntryRecord[]): Record<string,
 		}
 	}
 	return open;
+}
+
+/** One set's question ids where its post or a revision first listed them, from its `ask_user` results (PI WEB `partialAsksFromTranscript`). */
+export function historyOrder(history: readonly EntryRecord[], askId: string): string[] {
+	const order: string[] = [];
+	for (const entry of history) {
+		const message = entry.model?.[0] as { role?: string; toolName?: string; isError?: boolean; details?: { ask?: PendingAsk } } | undefined;
+		const ask = message?.role === "toolResult" && message.toolName === "ask_user" && message.isError !== true ? message.details?.ask : undefined;
+		if (ask?.askId === askId) order.push(...ask.questions.map((q) => q.id).filter((id) => !order.includes(id)));
+	}
+	return order;
 }
 
 /** PI WEB's `messageHistoryTargetId` (messageHistoryTarget.ts) over the active branch's visible entries. */

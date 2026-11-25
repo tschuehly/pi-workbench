@@ -31,7 +31,7 @@ import { completePrefix, redact, sanitizeDeep, sanitizingEnv, sealed } from "./r
 import { COMMANDS, type CommandResult, NOTICE_TYPES, runCommand, storagePreflight } from "./extensions.ts";
 import { type ContributedResources, PACKAGE_MESSAGE_ENTRY } from "./packages.ts";
 import { FAST_COMMAND, FAST_STATUS } from "./providers.ts";
-import { BUSY, commitNavigation, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
+import { BUSY, commitNavigation, entries, historyOrder, historyTree, planNavigation, type TreeEntry } from "./tree.ts";
 import { BACKGROUND_BASH_STATUS, BashJobsDoc } from "./background-bash.ts";
 import type { SpawnResult } from "./spawn-session.ts";
 import { CHAT_MESSAGE_TYPE, CHAT_PAUSED, type ChatListResult, type ChatMessageDelivery, type ChatMessageResult, type Delivery, deliveredBefore, type IncomingChatMessage, submitChatMessage } from "./chat-message.ts";
@@ -988,7 +988,10 @@ export class ChatSession {
 	/** Close an open question set with PI WEB's validated outcome; the answers reach the model once, as a follow-up. */
 	async closeAsk(request: CloseAsk): Promise<Awaited<ReturnType<typeof closeAsk>>> {
 		await this.#resume();
-		const result = await closeAsk(this.#host.root, request);
+		const { harness, root } = this.#host;
+		// A final close of a set with no recorded order (posted before the host kept one, or open in a fork) reads it from history.
+		const known = (request.outcome as { partial?: unknown }).partial === true || (await questionsState(harness, root)).order?.[request.askId] !== undefined;
+		const result = await closeAsk(root, request, known ? undefined : historyOrder(await entries(root), request.askId));
 		// A partial send keeps the set open under a new revision: browsers replace its card, as on an update.
 		if (result.result === "closed" && !result.retried) this.#emit(result.ask === undefined ? { type: "ask.closed", askId: request.askId, reason: result.outcome.reason } : { type: "ask.opened", ask: result.ask });
 		await this.#publishStatus();

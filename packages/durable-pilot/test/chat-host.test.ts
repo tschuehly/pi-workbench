@@ -12,7 +12,7 @@ import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
 import { context } from "../src/host.ts";
-import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
+import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
@@ -703,6 +703,48 @@ test("ask_user partial send: the final close returns the set's question order, a
 	assert.equal(integrity(store), "ok");
 });
 
+test("ask_user partial send: a set with no recorded order (posted before the host kept one) gets it back from history on its final close", async () => {
+	const { h, session, settled } = await quietChat("ask-order-history");
+	try {
+		const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+		await settled(1);
+		// As a host before the order was kept: the document has none for the set.
+		await h.harness.commit(async (tx) => { delete (await tx.doc(QuestionsDoc, h.root.id)).order; }, context);
+		const { askId, revision } = Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+		assert.equal((await session.closeAsk({ askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" })).result, "closed");
+		const rest = { askId, reason: "submitted", askedAt: "", closedAt: "", questions: [{ question: ASK.questions[0], answered: true, values: ["prod"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1 of 1; none left unanswered" };
+		// The JSON PI WEB sends (ASK's optional fields are not JSON-typed).
+		const final = await session.closeAsk({ askId, revision: "r2", operationId: "op-p2", outcome: JSON.parse(JSON.stringify(rest)), content: "Answer: target prod" });
+		assert.deepEqual(final.result === "closed" ? final.order : undefined, ["target", "when"], "the order the set was posted in, not send order");
+	} finally {
+		await session.close();
+	}
+});
+
+test("ask_user: the set tracks who supplied its context; the user's edit, kept by a revision without context, ended by one with the same text", async () => {
+	const { h, session, settled } = await quietChat("ask-context-by");
+	try {
+		const when = { id: "when", question: "When?", detail: "The deploy window.", options: [{ value: "now", label: "Now" }] };
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, questions: [ASK.questions[0]!, when] })}` });
+		await settled(1);
+		const open = async () => Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const { askId, revision } = await open();
+		const partial = { askId, reason: "submitted", askedAt: "", closedAt: "", editedContext: "Mine", questions: [{ question: when, answered: true, values: ["now"] }], answeredCount: 1, unansweredIds: [], summary: "Answered 1; still open: target", partial: true, revision: "r2" };
+		await session.closeAsk({ askId, revision, operationId: "op-p1", outcome: partial, content: "Answer: when now" });
+		assert.deepEqual([(await open()).context, (await open()).contextEdited], ["Mine", true]);
+		await session.prompt({ operationId: "op-u1", text: `call:ask_user ${JSON.stringify({ update: askId })}` });
+		await settled(3);
+		assert.equal((await open()).contextEdited, true, "a revision without context keeps the user's");
+		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, context: "Mine" })}` });
+		await settled(4);
+		assert.deepEqual([(await open()).context, (await open()).contextEdited], ["Mine", undefined], "the agent's revision, though its text is the user's");
+	} finally {
+		await session.close();
+	}
+});
+
 test("ask_user: the result of a new and of an updated set tells the model not to restate, summarize or add context in the Chat", async () => {
 	const { store, cwd } = family("ask-chat-rule");
 	const host = new ChatHost(store, cwd);
@@ -791,8 +833,13 @@ test("ask_user partial send: one answer is delivered, the rest stays open at the
 	await host.until((e) => e.type === "agent.end", "the second delivery");
 	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
 	assert.equal(logged(store).filter((l) => l.label.startsWith("Answer:")).length, 2, "each send reached the model once");
-	const transcript = await host.call<{ messages: { customType?: string }[] }>("transcript");
-	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 2);
+	const transcript = await host.call<{ messages: { customType?: string; content?: unknown; details?: { questions: { question: { id: string } }[]; summary: string; answeredCount: number } }[] }>("transcript");
+	const records = transcript.messages.filter((m) => m.customType === "pi-web.ask.answers");
+	assert.equal(records.length, 2);
+	// A reload or another device shows the whole set in the last card; the model's message keeps only this send's answer.
+	assert.deepEqual(records[1]!.details?.questions.map((q) => q.question.id), ["target", "when"]);
+	assert.deepEqual([records[1]!.details?.answeredCount, records[1]!.details?.summary], [2, "Answered 2 of 2; none left unanswered"]);
+	assert.equal(textOf(records[1]!.content), "Answer: when now");
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
@@ -1036,4 +1083,16 @@ test("remainingAsk: a partial send's edited context becomes the set's context; n
 	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "My plan" })?.context, "My plan");
 	assert.equal(remainingAsk(ask, outcome)?.context, "Agent's plan");
 	assert.equal(remainingAsk(ask, { ...outcome, editedContext: "" })?.context, undefined, "a cleared context stays cleared");
+});
+
+test("wholeRecord: as PI WEB's withEarlierAnswers, unanswered ids follow the set order, and past the bound the summary counts every answer and names the hidden ones", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string, answered: boolean) => ({ question: { id, question: `${id}?`, options: [] }, answered, values: answered ? ["x"] : [] });
+	const send = (questions: ReturnType<typeof record>[], partial: boolean) => ({ askId: "a1", reason: "submitted", questions, answeredCount: questions.filter((q) => q.answered).length, unansweredIds: [], summary: "s", ...(partial ? { partial: true, revision: "r" } : {}) });
+	// a went first; the agent revised the rest to c, b; both left unanswered.
+	const whole = wholeRecord(send([record("c", false), record("b", false)], false), [send([record("a", true)], true)], ["a", "b", "c"], false) as { questions: { question: { id: string } }[]; unansweredIds: string[]; summary: string } | undefined;
+	assert.deepEqual([whole?.questions.map((q) => q.question.id), whole?.unansweredIds, whole?.summary], [["a", "b", "c"], ["b", "c"], "Answered 1 of 3; unanswered: b, c"]);
+	const many = Array.from({ length: 6 }, (_, s) => send(Array.from({ length: 20 }, (_, i) => record(`s${String(s)}-${String(i)}`, true)), true));
+	const bounded = wholeRecord(send([record("last", true)], false), many, [], false) as { questions: unknown[]; answeredCount: number; summary: string } | undefined;
+	assert.deepEqual([bounded?.questions.length, bounded?.answeredCount, bounded?.summary], [100, 100, "Answered 121 of 121; none left unanswered; 21 earlier answers not shown"]);
 });
