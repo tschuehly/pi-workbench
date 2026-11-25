@@ -103,6 +103,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const images = messages.flatMap((m) => (m.role === "user" && Array.isArray(m.content) ? m.content.filter((part) => part.type === "image") : [])).length;
 		const ran = messages.flatMap((m) => (m.role === "user" ? [/^Ran `([^`]*)`/.exec(textOfMessage(m))?.[1]] : [])).filter((c) => c !== undefined);
 		const reasoning = (streamOptions as { reasoning?: string } | undefined)?.reasoning;
+		const cacheRetention = streamOptions?.cacheRetention;
 		// Every Working Mode block the request carries, anywhere in its messages (seq numbers, in order).
 		const modes = messages.flatMap((m) => [...textOfMessage(m).matchAll(/<working-mode seq="(\d+)">/g)].map((match) => Number(match[1])));
 		logLine(join(dir, "requests.log"), {
@@ -115,6 +116,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			...(images === 0 ? {} : { images }),
 			...(ran.length === 0 ? {} : { ran }),
 			...(reasoning === undefined ? {} : { reasoning }),
+			...(cacheRetention === undefined ? {} : { cacheRetention }),
 			...(modes.length === 0 ? {} : { modes }),
 			tools: offered(context),
 		});
