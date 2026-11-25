@@ -1111,6 +1111,142 @@ test("idle cache timer: a restart after the summary was placed finishes the mark
 	}
 });
 
+/** Runs `before` once, right before Durable's placement commit (`place`) of a hook-written summary starts. */
+function beforePlacement(h: Awaited<ReturnType<typeof idleChat>>["h"], before: () => unknown) {
+	// The hook runtime's commits go through the harness's untyped `commitWith`.
+	const harness = h.harness as unknown as { commitWith: (...args: unknown[]) => unknown };
+	const commitWith = harness.commitWith.bind(harness);
+	const state = { reached: false };
+	harness.commitWith = (...args) => {
+		if (state.reached || !/at place \(/.test(new Error().stack ?? "")) return commitWith(...args);
+		state.reached = true;
+		return (async () => (await before(), commitWith(...args)))();
+	};
+	return state;
+}
+
+test("idle cache timer: losing the last viewer after the cheap summary returned, right before its placement, places nothing", async () => {
+	const { store, cwd } = family("idle-viewer-loss-placement");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const placement = beforePlacement(h, () => session.setViewed(false));
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => placement.reached, "the placement commit");
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [SUMMARY]);
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+for (const how of ["setModel", "a stored model change"] as const)
+	test(`idle cache timer: the Chat's model changing to Terra (${how}) right before the summary's placement places nothing`, async () => {
+		const { store, cwd } = family(`idle-switch-placement-${how === "setModel" ? "set" : "stored"}`);
+		const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+		const terra = { provider: "openai-codex", modelId: "gpt-6.1-terra" };
+		const placement = beforePlacement(h, () => (how === "setModel" ? session.setModel(terra.provider, terra.modelId) : h.root.configure({ model: terra }, context)));
+		try {
+			await session.prompt({ operationId: "op-1", text: PAD });
+			await settled(1);
+			await until(() => placement.reached, "the placement commit");
+			await quiet();
+			await wait(500);
+			assert.equal(compacted(), false, "the previous model's Sonnet summary is not placed");
+			assert.equal(await markers(), 0);
+		} finally {
+			await session.close();
+		}
+	});
+
+test("idle cache timer: losing the last viewer while the summary's placement waits behind another commit places nothing", async () => {
+	const { store, cwd } = family("idle-viewer-loss-queued");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const harness = h.harness as unknown as { commitWith: (...args: unknown[]) => unknown };
+	const commitWith = harness.commitWith.bind(harness);
+	let queued!: () => void;
+	const placing = new Promise<void>((resolve) => (queued = resolve));
+	harness.commitWith = (...args) => {
+		const result = commitWith(...args);
+		if (/at place \(/.test(new Error().stack ?? "")) queued();
+		return result;
+	};
+	let entered!: () => void;
+	const holding = new Promise<void>((resolve) => (entered = resolve));
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	let held: Promise<unknown> | undefined;
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the held summary request");
+		held = h.root.commit(async () => (entered(), await released), context);
+		await holding;
+		writeFileSync(gate, "");
+		await placing;
+		session.setViewed(false);
+		release();
+		await held;
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		release();
+		await held;
+		await session.close();
+	}
+});
+
+test("idle cache timer: a Chat on Haiku (cheaper than the Sonnet writer) never arms it", async () => {
+	const { store, cwd } = family("idle-haiku-chat");
+	const { session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.setModel("anthropic", "claude-haiku-5-5");
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "no Sonnet summary for a Haiku Chat");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: reselecting the Chat's current model keeps the armed timer", async () => {
+	const { store, cwd } = family("idle-same-model");
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await session.setModel(OPUS.provider, OPUS.modelId);
+		await until(async () => (await markers()) === 1, "the timer compaction", 8_000);
+		assert.deepEqual(summaries(store), [SUMMARY]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: an older Opus outside the routing roster (claude-opus-4-7) gets the timer and the cheap wake on Sonnet", async () => {
+	const { store, cwd } = family("idle-opus-4-7");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.setModel("anthropic", "claude-opus-4-7");
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction");
+		const id = await submitWake(h.root, wakeDraft("job-1", "tests passed"), h.models);
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.deepEqual(turns(store).map((t) => t.model), ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-5-5"]);
+	} finally {
+		await session.close();
+	}
+});
+
 test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
 	const { h, store, session, settled } = await quietChat("back");
 	try {

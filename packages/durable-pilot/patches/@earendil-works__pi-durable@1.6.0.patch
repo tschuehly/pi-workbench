@@ -20,7 +20,7 @@ index 02d9e3d..8644921 100644
  export declare function summarizedMessages(view: ContextView, cut: number): Message[];
  /**
 diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
-index 54f3ef3..8ef6ffc 100644
+index 54f3ef3..894a19e 100644
 --- a/dist/harness/compaction.js
 +++ b/dist/harness/compaction.js
 @@ -68,7 +68,7 @@ export const CompactionTask = defineTask({
@@ -32,6 +32,15 @@ index 54f3ef3..8ef6ffc 100644
              if (cut === undefined)
                  return complete(runtime, context);
              const firstKept = view.entries[cut].id;
+@@ -88,7 +88,7 @@ export const CompactionTask = defineTask({
+             if (decision !== undefined && "decline" in decision)
+                 return complete(runtime, context);
+             if (decision !== undefined)
+-                return place(runtime, firstKept, decision.summary, context);
++                return place(runtime, firstKept, decision.summary, decision.placeIf, context);
+             const request = {
+                 attempt: 1,
+                 model: ref,
 @@ -226,7 +226,7 @@ export function compactionPolicy(settings, model, conversation) {
   * that entry: an entry whose contribution starts with a user or assistant message, never a tool result, and never a
   * user entry that a result of the preceding assistant's calls still follows.
@@ -52,6 +61,26 @@ index 54f3ef3..8ef6ffc 100644
      return undefined;
  }
  function isCandidate(contributions, index) {
+@@ -376,9 +380,16 @@ function truncate(text, maxChars) {
+         return text;
+     return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
+ }
+-/** Place a summary supplied by a hook in its own commit. */
+-async function place(runtime, firstKept, summary, context) {
+-    await runtime.commit(async (tx, current) => placeSummary(tx, runtime, current, await tx.doc(LiveDoc, runtime.conversationId), firstKept, summary), context);
++/** Place a summary supplied by a hook in its own commit; a `placeIf` of the hook that is false in that commit completes without it. */
++async function place(runtime, firstKept, summary, placeIf, context) {
++    await runtime.commit(async (tx, current) => {
++        const live = await tx.doc(LiveDoc, runtime.conversationId);
++        if (placeIf !== undefined && !(await placeIf(tx))) {
++            removeCompactionStatus(live, runtime.taskId);
++            return { status: "terminal", outcome: { status: "completed", result: {} } };
++        }
++        return placeSummary(tx, runtime, current, live, firstKept, summary);
++    }, context);
+ }
+ /**
+  * Place the summary entry and complete (spec §8.7). A blocking compaction, owned by its generation, appends it: the
 diff --git a/dist/harness/generation.d.ts b/dist/harness/generation.d.ts
 index ed1f22b..b3e7998 100644
 --- a/dist/harness/generation.d.ts
@@ -331,7 +360,7 @@ index 908492f..cfa1e49 100644
  //# sourceMappingURL=submissions.js.map
 \ No newline at end of file
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index 7ba2571..b9dd9db 100644
+index 7ba2571..2bf0347 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
 @@ -11,6 +11,11 @@ import type { TaskGraph, TaskGraphWatch } from "./task-graph.ts";
@@ -360,6 +389,15 @@ index 7ba2571..b9dd9db 100644
  } | {
      readonly type: "write";
      readonly entry: EntryDraft;
+@@ -1140,6 +1152,8 @@ export interface CompactionHooks {
+         readonly decline: true;
+     } | {
+         readonly summary: string;
++        /** Evaluated in the placement commit: false completes the compaction without the summary. */
++        readonly placeIf?: (tx: Tx) => boolean | Promise<boolean>;
+     }>;
+ }
+ export {};
 diff --git a/dist/index.d.ts b/dist/index.d.ts
 index 0131504..b889535 100644
 --- a/dist/index.d.ts

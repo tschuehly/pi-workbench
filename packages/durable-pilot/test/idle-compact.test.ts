@@ -155,6 +155,14 @@ test("a heavy Chat model outside the routing roster still gets its provider's su
 	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.1-sol" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
 });
 
+test("only an Opus, Fable, Sol or Astra Chat gets a summary writer: Haiku, Sonnet, Terra, Luna and unknown models never", () => {
+	for (const modelId of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-sonnet-4-5", "claude-mystery-9"]) assert.equal(idle.summaryModelFor({ provider: "anthropic", modelId }), undefined, modelId);
+	for (const modelId of ["gpt-6.1-terra", "gpt-6-luna", "gpt-6.2", "gpt-6.2-mini"]) assert.equal(idle.summaryModelFor({ provider: "openai-codex", modelId }), undefined, modelId);
+	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-opus-4-7" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-fable-5-2" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.2-astra" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
+});
+
 test("a Chat with no cheaper summary writer gets none: the writer itself, or a light-tier model", () => {
 	assert.equal(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-sonnet-5-5" }), undefined, "a Sonnet Chat");
 	assert.equal(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.1-terra" }), undefined, "a Terra Chat");

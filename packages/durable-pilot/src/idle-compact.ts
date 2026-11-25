@@ -13,10 +13,10 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type Api, type AssistantMessage, type CacheRetention, getPromptCacheTtlMs, type Model, type Usage } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
-import { AgentDoc, CompactionTask, defineExtension, hook, InboxDoc, LiveDoc, type ModelRef } from "@earendil-works/pi-durable";
+import { AgentDoc, CompactionTask, defineExtension, hook, InboxDoc, LiveDoc, type ModelRef, type Tx } from "@earendil-works/pi-durable";
 import type { Checkpoint, WorkstreamSession, WorkstreamStore } from "../../workstream-store/src/index.js";
 import { compactionInstructions } from "../../../extensions/context-checkpoint/coordinator.mjs";
-import { light } from "./cheap-wake.ts";
+import { heavyFamily } from "./cheap-wake.ts";
 import { redact } from "./redact.ts";
 import { defineDoc } from "./store-schema.ts";
 
@@ -120,13 +120,12 @@ export const madeBy = (message: { provider: string; model: string }, ref: ModelR
 	ref !== undefined && message.model === ref.modelId && (message.provider === ref.provider || message.provider === "faux");
 
 /**
- * The cheap summary model for a Chat on `own`; none for a provider without one, and none when it would save nothing:
- * `own` is that model itself or a light tier model (as every cheap wake's override model is). Any other model of the
- * provider qualifies, also one the routing roster does not list (e.g. claude-opus-5).
+ * The cheap summary model for a Chat on `own`: its provider's writer, only for a heavy family model (`heavyFamily`: Opus,
+ * Fable, Sol, Astra, also one the routing roster does not list, e.g. claude-opus-4-7); none for any other model or provider.
  */
 export const summaryModelFor = (own: ModelRef): ModelRef | undefined => {
 	const modelId = IDLE_SUMMARY_MODELS[own.provider];
-	return modelId === undefined || modelId === own.modelId || light(own) ? undefined : { provider: own.provider, modelId };
+	return modelId === undefined || heavyFamily(own) === undefined ? undefined : { provider: own.provider, modelId };
 };
 
 /** What the session tells the hook: why a timer compaction may not summarize now (in-process state), and where its warnings and usage go. */
@@ -170,12 +169,11 @@ export function idleCompaction() {
 						if (gate.blocked(Number(api.conversationId), intent.task) !== undefined || api.now() >= intent.expiresAt) return decline();
 						if ((await api.snapshot(LiveDoc, api.conversationId, c))?.run !== undefined || ((await api.snapshot(InboxDoc, api.conversationId, c))?.items.length ?? 0) > 0) return decline();
 						// The Chat's model changed since admission: the summary would go to the previous one's provider.
-						const writerChanged = async () => {
-							const own = (await api.snapshot(AgentDoc, api.conversationId, c))?.model;
+						const sameWriter = (own: ModelRef | undefined) => {
 							const writer = own === undefined ? undefined : summaryModelFor(own);
-							return writer?.provider !== intent.summaryModel.provider || writer.modelId !== intent.summaryModel.modelId;
+							return writer?.provider === intent.summaryModel.provider && writer.modelId === intent.summaryModel.modelId;
 						};
-						if (await writerChanged()) return decline();
+						if (!sameWriter((await api.snapshot(AgentDoc, api.conversationId, c))?.model)) return decline();
 						const { provider, modelId } = intent.summaryModel;
 						const model = api.models.getModel(provider, modelId);
 						if (model === undefined) return decline(`Idle compaction skipped: ${provider}/${modelId} is not available.`);
@@ -188,10 +186,11 @@ export function idleCompaction() {
 							{ maxTokens: Math.min(SUMMARY_MAX_TOKENS, model.maxTokens > 0 ? model.maxTokens : SUMMARY_MAX_TOKENS), cacheRetention: "none", signal: AbortSignal.any(signals) },
 						);
 						gate.usage(message);
-						// An attempt cancelled (a model switch, the viewer gone) or whose writer changed while it ran is never placed.
-						if (cancel?.aborted === true || (await writerChanged())) return decline();
+						// Checked in the placement commit itself (our pi-durable patch): an attempt cancelled (a model switch, the viewer
+						// gone) or whose writer changed while it ran, or while its placement waited for the store, is never placed.
+						const placeIf = async (tx: Tx) => cancel !== undefined && !cancel.aborted && sameWriter((await tx.doc(AgentDoc, api.conversationId)).model);
 						const summary = summaryText(message);
-						if (summary !== undefined) return { summary: redact(summary) };
+						if (summary !== undefined) return { summary: redact(summary), placeIf };
 						if (message.stopReason === "aborted") return decline();
 						const why = message.stopReason === "length" ? "was cut off at its length limit" : message.stopReason === "error" ? `failed (${redact(message.errorMessage ?? "error")})` : "had no text";
 						return decline(`Idle compaction skipped: the ${provider}/${modelId} summary ${why}; the context stays as it is.`);

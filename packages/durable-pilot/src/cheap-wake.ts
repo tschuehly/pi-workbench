@@ -1,11 +1,10 @@
-// Cheap wake-up: a background-job completion that wakes a Chat whose context was just compacted runs that one run on
-// a cheaper model of the same provider (each model has its own prompt cache, so only a small, cold context pays off).
+// Cheap wake-up: a background-job completion that wakes a Chat on a heavy model whose context was just compacted runs
+// that one run on a cheaper model of the same provider (each model has its own prompt cache, so only a small, cold context pays off).
 // The wake's input carries a one-run override (our pi-durable patch, `InputSubmissionDraft.override`): the cheap model
 // and hand_back, used by that run's generations and tool calls only. Nothing is stored in `pi.agent`, so forks, tree
 // navigation and later runs keep the own model; any input that joins the run at a tool boundary (owner input, another
 // completion, a Subagent update) or an extension's continuation ends the override, so it never answers on the cheap
 // model. The cheap-turn instruction is never stored: each request of the run gets it while the override lasts.
-import { readFileSync } from "node:fs";
 import type { Context } from "@earendil-works/chord/context";
 import { str, obj } from "@earendil-works/pi-schema";
 import {
@@ -35,24 +34,26 @@ export const CheapWakeDoc = defineDoc<{ handedBack: Record<string, ModelRef & { 
 	checkpointWhen: () => false,
 });
 
-type Policy = { models: Record<string, { provider: string; model: string }>; tiers: Record<string, string[]>; reserve: string[] };
-const POLICY = JSON.parse(readFileSync(new URL("../../../skills/model-orchestration/references/routing-policy.json", import.meta.url), "utf8")) as Policy;
-const ids = (names: readonly string[]) => names.map((name) => POLICY.models[name]!.model);
-
-/** A light tier model (the cheap wake's and a summary writer's tier). */
-export const light = (own: ModelRef) => ids(POLICY.tiers.light ?? []).includes(own.modelId);
-
-/** A strong, standard or reserve tier model: one a light model is cheaper than. */
-export const heavy = (own: ModelRef) => [...ids(POLICY.tiers.strong ?? []), ...ids(POLICY.tiers.standard ?? []), ...ids(POLICY.reserve)].includes(own.modelId);
-
 /**
- * The routing policy's `light` tier (the `routine` role) model of `own`'s provider, when `own` is a heavier tier's
- * model and that one is available; otherwise none (a Chat already on a light or unknown model keeps it).
+ * The heavy family of `own` a cheaper model may stand in for, by model ID, so older and newer versions (claude-opus-4-7,
+ * gpt-6.1-sol) qualify: Claude Opus or Fable, Codex Sol or Astra. Any other model (Haiku, Sonnet, Terra, Luna, unknown) has
+ * none: a cheaper summary writer or wake model would save nothing, or cost more (Sonnet writing for a Haiku Chat).
+ * The cheap wake (`cheapModel`) and the idle summary writer (idle-compact.ts `summaryModelFor`) both use it.
  */
+export function heavyFamily(own: ModelRef): "claude" | "codex" | undefined {
+	if (/^claude-(opus|fable)\b/.test(own.modelId)) return "claude";
+	if (/^gpt-[\d.]+-(sol|astra)\b/.test(own.modelId)) return "codex";
+	return undefined;
+}
+
+/** The light model of each heavy family: the cheap wake's model (the routing policy's `routine` role). */
+const WAKE_MODELS = { claude: "claude-sonnet-5-5", codex: "gpt-6-luna" } as const;
+
+/** The light model of `own`'s heavy family on `own`'s provider, when that one is available; otherwise none (a Chat off a heavy family keeps its model). */
 export function cheapModel(own: ModelRef, available: readonly { provider: string; id: string }[]): ModelRef | undefined {
-	if (!heavy(own)) return undefined;
-	const light = ids(POLICY.tiers.light ?? []).find((id) => id !== own.modelId && available.some((m) => m.provider === own.provider && m.id === id));
-	return light === undefined ? undefined : { provider: own.provider, modelId: light };
+	const family = heavyFamily(own);
+	const light = family === undefined ? undefined : WAKE_MODELS[family];
+	return light === undefined || !available.some((m) => m.provider === own.provider && m.id === light) ? undefined : { provider: own.provider, modelId: light };
 }
 
 /** The own model when a wake-up now may be cheap: an idle conversation whose newest model-visible entry is a compaction summary. */
@@ -66,7 +67,7 @@ async function eligible(tx: Tx, id: ConversationId, draft: InputSubmissionDraft)
 	const newest = (await tx.scanEntries({ conversationId: id }, 20)).items.find((entry) => entry.model !== undefined && entry.model.length > 0);
 	if (newest?.kind !== CompactionEntry.kind) return undefined;
 	const own = (await tx.doc(AgentDoc, id)).model;
-	return own === undefined || !heavy(own) ? undefined : { ...own };
+	return own === undefined || heavyFamily(own) === undefined ? undefined : { ...own };
 }
 
 /**

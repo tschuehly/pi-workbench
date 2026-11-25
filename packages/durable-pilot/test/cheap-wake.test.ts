@@ -79,6 +79,12 @@ test("cheap model choice: a heavier tier's model gets its provider's light model
 	assert.equal(cheapModel({ provider: "faux", modelId: "faux-1" }, [LIGHT]), undefined, "not in the policy");
 	assert.equal(cheapModel(OWN, []), undefined, "no cheaper model available");
 	assert.equal(cheapModel(OWN, [{ provider: "github-copilot", id: "claude-sonnet-5-5" }]), undefined, "another provider's");
+	assert.deepEqual(cheapModel({ provider: "anthropic", modelId: "claude-opus-4-7" }, [LIGHT]), { provider: "anthropic", modelId: "claude-sonnet-5-5" }, "an older Opus off the roster");
+	assert.deepEqual(cheapModel({ provider: "anthropic", modelId: "claude-fable-5-2" }, [LIGHT]), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(cheapModel({ provider: "openai-codex", modelId: "gpt-6.1-sol" }, [{ provider: "openai-codex", id: "gpt-6-luna" }]), { provider: "openai-codex", modelId: "gpt-6-luna" }, "an older Sol off the roster");
+	assert.deepEqual(cheapModel({ provider: "openai-codex", modelId: "gpt-6.2-astra" }, [{ provider: "openai-codex", id: "gpt-6-luna" }]), { provider: "openai-codex", modelId: "gpt-6-luna" });
+	assert.equal(cheapModel({ provider: "anthropic", modelId: "claude-haiku-5-5" }, [LIGHT]), undefined, "Haiku is cheaper than Sonnet");
+	assert.equal(cheapModel({ provider: "openai-codex", modelId: "gpt-6.1-terra" }, [{ provider: "openai-codex", id: "gpt-6-luna" }]), undefined, "Terra is no heavy family");
 });
 
 test("a delivery right after a compaction runs on the cheap model without writing the agent settings; any other delivery runs on the own model", async () => {
