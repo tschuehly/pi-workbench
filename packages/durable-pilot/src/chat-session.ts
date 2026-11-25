@@ -16,6 +16,7 @@ import {
 	LiveDoc,
 	type LiveState,
 	ResetEntry,
+	type ModelRef,
 	type SubmissionId,
 	type TaskId,
 	type ToolSlot,
@@ -1225,7 +1226,8 @@ export class ChatSession {
 		const last = entry?.model?.[0] as AssistantMessage | undefined;
 		if (last === undefined || this.#closed || this.#running || !this.#viewed || this.#chat?.idle === undefined || this.#idleAbort !== undefined) return;
 		const own = (await this.#host.root.agent(context)).model;
-		if (epoch !== this.#idleEpoch || this.#idle !== undefined || !madeBy(last, own)) return;
+		// No cheaper writer (a light-tier Chat, as every cheap wake-up's override model is): nothing to save.
+		if (epoch !== this.#idleEpoch || this.#idle !== undefined || !madeBy(last, own) || summaryModelFor(own!) === undefined) return;
 		const usages = this.#entries.toReversed().flatMap((candidate) => {
 			const message = candidate.model?.[0] as Message | undefined;
 			return message?.role === "assistant" && madeBy(message, own) ? [message.usage] : [];
@@ -1303,14 +1305,15 @@ export class ChatSession {
 		const baseline = await this.#idleBaseline();
 		// Not a paused restore (checked above): a reopened host schedules tasks only once something resumes it, as `/compact` does.
 		await this.#resume();
-		await this.exclusive(() => this.#admitIdle(arm, summaryModel, baseline));
+		await this.exclusive(() => this.#admitIdle(arm, own, summaryModel, baseline));
 	}
 
 	/**
 	 * Create the timer's compaction task, with the intent its note needs, in one commit that checks every condition
-	 * again: this branch and request, viewed, no run, an empty inbox, no `!` command, the cache entry still alive.
+	 * again: this branch and request, viewed, no run, an empty inbox, no `!` command, the cache entry still alive, the
+	 * Chat's model still `own`, and no earlier attempt for this request (a declined summary is not paid for again).
 	 */
-	async #admitIdle(arm: IdleArm, summaryModel: IdleIntent["summaryModel"], baseline: IdleBaseline): Promise<void> {
+	async #admitIdle(arm: IdleArm, own: ModelRef, summaryModel: IdleIntent["summaryModel"], baseline: IdleBaseline): Promise<void> {
 		const { root } = this.#host;
 		const abort = new AbortController();
 		this.#idleAbort = abort;
@@ -1321,15 +1324,18 @@ export class ChatSession {
 				if (this.#host.root !== root || Number(root.id) !== arm.rootId || Number(this.#lastAssistantEntry()?.id) !== arm.entryId) return undefined;
 				const live = await tx.doc(LiveDoc, root.id);
 				if (live.run !== undefined || (live.compactions?.length ?? 0) > 0 || (await tx.doc(InboxDoc, root.id)).items.length > 0) return undefined;
+				const model = (await tx.doc(AgentDoc, root.id)).model;
+				if (model?.provider !== own.provider || model.modelId !== own.modelId) return undefined;
 				const doc = await tx.doc(IdleCacheDoc, root.id);
-				if (doc.intent !== null) return undefined;
+				if (doc.intent !== null || doc.attempted === arm.entryId) return undefined;
 				// Durable's manual compaction with its live status, as the checkpoint task creates one; its instructions mark it.
 				// `idle` (our pi-durable patch): a first entry larger than the keep window alone may be summarized too.
 				const task = await tx.createTask(CompactionTask, { reason: "manual", idle: true, instructions: IDLE_INSTRUCTIONS }, { ownership: { kind: "conversation" } });
 				live.compactions ??= [];
 				live.compactions.push({ taskId: task, trigger: "manual", blocking: false, attempt: 1 });
-				const created: IdleIntent = { task: Number(task), rootId: Number(root.id), firedAt: this.#now(), expiresAt: arm.expiresAt, summaryModel, baseline };
+				const created: IdleIntent = { task: Number(task), rootId: Number(root.id), entryId: arm.entryId, firedAt: this.#now(), expiresAt: arm.expiresAt, summaryModel, baseline };
 				doc.intent = created;
+				doc.attempted = arm.entryId;
 				this.#idleTask = created.task;
 				return created;
 			}, context);
@@ -1395,11 +1401,15 @@ export class ChatSession {
 				this.#idleTask = undefined;
 				this.#idleAbort = undefined;
 			}
-			if (!this.#closed)
+			if (!this.#closed) {
 				await root.commit(async (tx) => {
 					const doc = await tx.doc(IdleCacheDoc, intent.rootId as unknown as ConversationId);
 					if (doc.intent?.task === intent.task) doc.intent = null;
 				}, context);
+				// A newer request whose turn ended while this one unwound found the timer busy: arm it now.
+				const newest = this.#lastAssistantEntry();
+				if (newest !== undefined && Number(newest.id) !== intent.entryId) void this.#armIdle().catch(() => {});
+			}
 		}
 	}
 

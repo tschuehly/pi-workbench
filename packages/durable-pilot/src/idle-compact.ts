@@ -13,9 +13,10 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { type Api, type AssistantMessage, type CacheRetention, getPromptCacheTtlMs, type Model, type Usage } from "@earendil-works/pi-ai";
 import { serializeConversation } from "@earendil-works/pi-coding-agent";
-import { CompactionTask, defineExtension, hook, InboxDoc, LiveDoc, type ModelRef } from "@earendil-works/pi-durable";
+import { AgentDoc, CompactionTask, defineExtension, hook, InboxDoc, LiveDoc, type ModelRef } from "@earendil-works/pi-durable";
 import type { Checkpoint, WorkstreamSession, WorkstreamStore } from "../../workstream-store/src/index.js";
 import { compactionInstructions } from "../../../extensions/context-checkpoint/coordinator.mjs";
+import { heavy } from "./cheap-wake.ts";
 import { redact } from "./redact.ts";
 import { defineDoc } from "./store-schema.ts";
 
@@ -98,9 +99,13 @@ export function idleCompactDue(state: IdleState): boolean {
  */
 export type IdleBaseline = { workstreamId: string; checkpoint?: string } | null;
 
-/** A timer compaction in flight, stored with its task in the commit that creates it, so a restart finishes its note. */
-export type IdleIntent = { task: number; rootId: number; firedAt: number; expiresAt: number; summaryModel: ModelRef; baseline: IdleBaseline };
-export const IdleCacheDoc = defineDoc<{ intent: IdleIntent | null }>({
+/**
+ * A timer compaction in flight, stored with its task in the commit that creates it, so a restart finishes its note;
+ * `entryId`: the request entry it measured.
+ */
+export type IdleIntent = { task: number; rootId: number; entryId?: number; firedAt: number; expiresAt: number; summaryModel: ModelRef; baseline: IdleBaseline };
+/** `attempted`: the request entry the newest timer compaction measured, kept after its intent clears: one attempt per idle stretch, across restarts. */
+export const IdleCacheDoc = defineDoc<{ intent: IdleIntent | null; attempted?: number }>({
 	kind: "workbench.idle-cache",
 	version: 1,
 	scope: "conversation",
@@ -114,10 +119,13 @@ export const IdleCacheDoc = defineDoc<{ intent: IdleIntent | null }>({
 export const madeBy = (message: { provider: string; model: string }, ref: ModelRef | undefined): boolean =>
 	ref !== undefined && message.model === ref.modelId && (message.provider === ref.provider || message.provider === "faux");
 
-/** The cheap summary model for a Chat on `own`'s provider; none for a provider without one. */
-export const summaryModelFor = (own: { provider: string }): ModelRef | undefined => {
+/**
+ * The cheap summary model for a Chat on `own`; none for a provider without one, and none when it would save nothing:
+ * `own` is that model itself or not a heavier tier's (a light or unknown model).
+ */
+export const summaryModelFor = (own: ModelRef): ModelRef | undefined => {
 	const modelId = IDLE_SUMMARY_MODELS[own.provider];
-	return modelId === undefined ? undefined : { provider: own.provider, modelId };
+	return modelId === undefined || modelId === own.modelId || !heavy(own) ? undefined : { provider: own.provider, modelId };
 };
 
 /** What the session tells the hook: why a timer compaction may not summarize now (in-process state), and where its warnings and usage go. */
@@ -160,6 +168,10 @@ export function idleCompaction() {
 						if (intent == null || intent.task !== Number(api.taskId)) return decline();
 						if (gate.blocked(Number(api.conversationId), intent.task) !== undefined || api.now() >= intent.expiresAt) return decline();
 						if ((await api.snapshot(LiveDoc, api.conversationId, c))?.run !== undefined || ((await api.snapshot(InboxDoc, api.conversationId, c))?.items.length ?? 0) > 0) return decline();
+						// The Chat's model changed since admission: the summary would go to the previous one's provider.
+						const own = (await api.snapshot(AgentDoc, api.conversationId, c))?.model;
+						const writer = own === undefined ? undefined : summaryModelFor(own);
+						if (writer?.provider !== intent.summaryModel.provider || writer.modelId !== intent.summaryModel.modelId) return decline();
 						const { provider, modelId } = intent.summaryModel;
 						const model = api.models.getModel(provider, modelId);
 						if (model === undefined) return decline(`Idle compaction skipped: ${provider}/${modelId} is not available.`);
@@ -186,9 +198,12 @@ export function idleCompaction() {
 	return { extension, gate };
 }
 
-/** A session's checkpoint health: the checkpoint, when it was recorded, and its stale or failure marks. */
+/**
+ * A session's checkpoint health as a digest of the checkpoint, when it was recorded, and its stale or failure marks: the
+ * Chat store keeps it, and a failure reason may quote a secret.
+ */
 export const checkpointState = (session: WorkstreamSession | undefined): string =>
-	JSON.stringify([session?.latestCheckpoint?.id ?? null, session?.latestCheckpoint?.recordedAt ?? null, session?.checkpointStaleness?.recordedAt ?? null, session?.checkpointFailure ?? null]);
+	createHash("sha256").update(JSON.stringify([session?.latestCheckpoint?.id ?? null, session?.latestCheckpoint?.recordedAt ?? null, session?.checkpointStaleness?.recordedAt ?? null, session?.checkpointFailure ?? null])).digest("hex");
 
 /** The leading sentences of a summary as one line, at most about `max` characters. */
 function lead(summary: string, max = 300): string {
@@ -215,7 +230,7 @@ function segment(id: string): string {
  * host-written `checkpoint.replaced` for this session that points to it, carrying the previous checkpoint's remains, next,
  * waitingOn, nextSessionPrompt and sessionTitle forward, so `/back` orients on the latest state. Returns the note path;
  * a Chat without a home Workstream (`workstreamId` undefined) writes nothing. The checkpoint is skipped (the note file
- * stays) when the baseline could not be read, the session's checkpoint health changed since it, a turn started since
+ * stays) when the baseline could not be read, the session's checkpoint is stale or its health changed since it, a turn started since
  * (`stale`), or another session of the Workstream checkpointed after this one. Rerun for the same `firedAt` (a restart),
  * it keeps the note file it wrote and skips the checkpoint it already replaced.
  */
@@ -263,7 +278,8 @@ export async function writeIdleNote(
 		const previous = session.latestCheckpoint;
 		// Guidance from another Chat of this Workstream as new as this one's outranks a host note (the summary shows the newest).
 		const newer = snapshot.sessions.some((other) => other.id !== sessionId && other.latestCheckpoint !== null && other.latestCheckpoint.recordedAt >= (previous?.recordedAt ?? ""));
-		if (newer || checkpointState(session) !== request.checkpoint || (await request.stale?.()) === true) return path;
+		// A stale checkpoint stays marked stale: a host note must not clear the mark.
+		if (newer || session.checkpointStaleness != null || checkpointState(session) !== request.checkpoint || (await request.stale?.()) === true) return path;
 		const content: Omit<Checkpoint, "id"> = {
 			whatChanged: `Idle compaction before cache expiry (host-written note, not reviewed by the model): ${lead(summary)}`.slice(0, TEXT_LIMIT),
 			remains: previous?.remains ?? NONE,

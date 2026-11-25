@@ -53,7 +53,7 @@ index 54f3ef3..8ef6ffc 100644
  }
  function isCandidate(contributions, index) {
 diff --git a/dist/harness/generation.d.ts b/dist/harness/generation.d.ts
-index ed1f22b..4d01eac 100644
+index ed1f22b..b3e7998 100644
 --- a/dist/harness/generation.d.ts
 +++ b/dist/harness/generation.d.ts
 @@ -1,7 +1,7 @@
@@ -65,7 +65,16 @@ index ed1f22b..4d01eac 100644
  import { type ToolTaskResult } from "./tool.ts";
  import type { CompactionResult, ConversationStreamOptions, GenerationHooks, ModelRef, RunSummary } from "./types.ts";
  export type GenerationInput = Record<string, never>;
-@@ -109,6 +109,7 @@ export declare function convertPartial(tx: Tx, live: Draft<LiveState>, conversat
+@@ -24,6 +24,8 @@ export type GenerationCheckpoint = {
+     streamOptions: ConversationStreamOptions;
+     /** Newest entry included in the request. */
+     cutoff: EntryId;
++    /** Prepared under the run's override (`LiveRun.override`); prepared again once it has ended. */
++    override?: true;
+ } | {
+     phase: "retry";
+     attempt: number;
+@@ -109,6 +111,7 @@ export declare function convertPartial(tx: Tx, live: Draft<LiveState>, conversat
  export declare function startRun(tx: Tx, conversationId: ConversationId, live: Draft<LiveState>, run: {
      readonly inputs: SubmissionId[];
      readonly first: EntryId | undefined;
@@ -74,10 +83,59 @@ index ed1f22b..4d01eac 100644
      readonly keepFailure?: boolean;
  }): Promise<void>;
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 56f3055..6bc8a60 100644
+index 56f3055..6390736 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
-@@ -1058,8 +1058,12 @@ async function endToolRound(runtime, assistant, tools, taskTerminates, context)
+@@ -107,6 +107,8 @@ export const GenerationTask = defineTask({
+                 if (threshold === "background" && (await tx.doc(LiveDoc, conversationId)).compactions === undefined) {
+                     await createCompaction(tx, conversationId, { reason: "threshold" });
+                 }
++                // Pinned under the run's override: `request` prepares again if the override has ended by then.
++                const override = (await tx.doc(LiveDoc, conversationId)).run?.override !== undefined;
+                 const request = {
+                     attempt,
+                     ...(compacted === undefined ? {} : { compacted }),
+@@ -114,6 +116,7 @@ export const GenerationTask = defineTask({
+                     thinkingLevel,
+                     streamOptions: settings.stream,
+                     cutoff,
++                    ...(override ? { override } : {}),
+                 };
+                 return { status: "running", checkpoint: { phase: "request", ...request } };
+             }, context);
+@@ -125,8 +128,17 @@ export const GenerationTask = defineTask({
+             // The host stopped while this request was in flight: a failed attempt, not a resend (spec §8.3).
+             if (task.restarts !== undefined)
+                 return interrupted(runtime, task.state.checkpoint, context);
+-            const { attempt, compacted, model: ref, thinkingLevel, streamOptions, cutoff } = task.state.checkpoint;
++            const { attempt, compacted, model: ref, thinkingLevel, streamOptions, cutoff, override } = task.state.checkpoint;
+             const conversationId = runtime.conversationId;
++            // A request prepared under a run override that has since ended (a reopened host drops it) is prepared again
++            // on the stored agent, never sent on the override's model and tools.
++            if (override === true) {
++                const moved = await runtime.commit(async (tx) => (await tx.doc(LiveDoc, conversationId)).run?.override === undefined
++                    ? { status: "running", checkpoint: { phase: "prepare", attempt, ...(compacted === undefined ? {} : { compacted }) } }
++                    : undefined, context);
++                if (moved !== undefined)
++                    return;
++            }
+             // The attempt shown is presentation, stored like progress (`PROGRESS_COMMIT`); converting a partial left by an
+             // interrupted attempt appends an entry, which makes the commit immediate.
+             await runtime.commit(async (tx) => {
+@@ -763,8 +775,11 @@ async function concludeAnswer(tx, runtime, live, boundary, answer, continuation,
+         const user = { role: "user", content: continues, timestamp: runtime.now() };
+         await tx.appendEntry(UserEntry, conversationId, { model: [user] });
+         // The continuation starts the run's turn count over: bounding `onYield` loops is the extension's job.
+-        if (live.run?.taskId === runtime.taskId)
++        if (live.run?.taskId === runtime.taskId) {
+             live.run.turns = 0;
++            // A continuation is new input: it never answers on the run's override, as joined input does not.
++            delete live.run.override;
++        }
+         handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
+         delete live.generation;
+         return result;
+@@ -1058,8 +1073,12 @@ async function endToolRound(runtime, assistant, tools, taskTerminates, context)
              else {
                  delete live.tools;
                  delete live.nestedTools;
@@ -91,7 +149,7 @@ index 56f3055..6bc8a60 100644
                  handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
              }
          }
-@@ -1080,9 +1084,9 @@ async function appendAssistant(tx, conversationId, message) {
+@@ -1080,9 +1099,9 @@ async function appendAssistant(tx, conversationId, message) {
   * keeps its failure.
   */
  export async function startRun(tx, conversationId, live, run, options) {
@@ -104,7 +162,7 @@ index 56f3055..6bc8a60 100644
          delete live.runFailure;
  }
 diff --git a/dist/harness/harness.js b/dist/harness/harness.js
-index e51d731..747b7fd 100644
+index e51d731..cdfc105 100644
 --- a/dist/harness/harness.js
 +++ b/dist/harness/harness.js
 @@ -22,6 +22,16 @@ import { addUsageState, UsageDoc } from "./usage.js";
@@ -124,18 +182,6 @@ index e51d731..747b7fd 100644
  /** Key of the Harness's internal index-size getter, for tests. */
  export const SCHEDULER_INDEX_SIZES = Symbol.for("pi-durable.schedulerIndexSizes");
  /** Key of the Harness's internal idle-state getter (kept contexts against a full recompute), for tests. */
-@@ -45,9 +55,9 @@ class ConversationImpl {
-             return this.#host.submissions.submit(this.id, first, second);
-         return this.#host.submissions.admit(first, this.id, second);
-     }
--    async compact(instructions, context) {
-+    async compact(instructions, context, idle = false) {
-         this.#host.tasks.resume();
--        const input = { reason: "manual", ...(instructions === undefined ? {} : { instructions }) };
-+        const input = { reason: "manual", ...(idle ? { idle: true } : {}), ...(instructions === undefined ? {} : { instructions }) };
-         return this.#host.harness.commitWith((tx) => createCompaction(tx, this.id, input), context);
-     }
-     async reset(handoff, context) {
 @@ -126,7 +136,7 @@ class HarnessImpl extends SessionImpl {
              storage,
              registry: options.registry,
@@ -162,7 +208,7 @@ index e51d731..747b7fd 100644
      }
      /** Build a conversation's environment from its current `cwd`; `undefined` without an `env` option. */
 diff --git a/dist/harness/live.d.ts b/dist/harness/live.d.ts
-index 727a0eb..9d3c77d 100644
+index 727a0eb..a5ae0bf 100644
 --- a/dist/harness/live.d.ts
 +++ b/dist/harness/live.d.ts
 @@ -4,7 +4,7 @@ import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
@@ -178,7 +224,7 @@ index 727a0eb..9d3c77d 100644
      inputs: SubmissionId[];
      /** Tool rounds so far, which `AgentState.maxTurns` bounds; an `onYield` continuation starts the count over. */
      turns: number;
-+    /** The override of the input that started the run (`InputSubmissionDraft.override`), until other input joins it. */
++    /** The override of the input that started the run (`InputSubmissionDraft.override`), until other input or an `onYield` continuation joins it. */
 +    override?: {
 +        model?: ModelRef;
 +        tools?: string[];
@@ -282,7 +328,7 @@ index 908492f..cfa1e49 100644
  //# sourceMappingURL=submissions.js.map
 \ No newline at end of file
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index 7ba2571..26fc132 100644
+index 7ba2571..b9dd9db 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
 @@ -11,6 +11,11 @@ import type { TaskGraph, TaskGraphWatch } from "./task-graph.ts";
@@ -311,15 +357,6 @@ index 7ba2571..26fc132 100644
  } | {
      readonly type: "write";
      readonly entry: EntryDraft;
-@@ -886,7 +898,7 @@ export interface Conversation {
-      * Admit a manual compaction task and return its ID. It summarizes while the conversation keeps working and places its
-      * summary through a write submission: at once when idle, otherwise at the next boundary (spec §8.7).
-      */
--    compact(instructions: string | undefined, context: Context): Promise<TaskId<CompactionResult>>;
-+    compact(instructions: string | undefined, context: Context, idle?: boolean): Promise<TaskId<CompactionResult>>;
-     /** Session commit whose `tx.createTask()` defaults to this conversation; `options` as for `Session.commit()`. */
-     commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context, options?: CommitOptions): Promise<T>;
-     /**
 diff --git a/dist/index.d.ts b/dist/index.d.ts
 index 0131504..b889535 100644
 --- a/dist/index.d.ts

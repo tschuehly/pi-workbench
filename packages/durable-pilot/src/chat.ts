@@ -32,7 +32,7 @@ import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
 import { CACHE_RETENTION, idleCompaction, type IdleGate } from "./idle-compact.ts";
 import { BackgroundBash } from "./background-bash.ts";
-import { cheapWakeExtension, submitWake } from "./cheap-wake.ts";
+import { cheapWakeExtension, dropOverride, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -317,6 +317,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
 	if (options.readOnly !== true) await applyModel(host);
+	// A cheap run a restart interrupted resumes on the stored model (rule: a restored run never keeps its override).
+	if (options.readOnly !== true) await dropOverride(host.root);
 	await packages?.start({
 		// The active branch at each use: history navigation may select another.
 		get root() { return host.root; },

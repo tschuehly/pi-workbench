@@ -3,12 +3,13 @@
 // The wake's input carries a one-run override (our pi-durable patch, `InputSubmissionDraft.override`): the cheap model
 // and hand_back, used by that run's generations and tool calls only. Nothing is stored in `pi.agent`, so forks, tree
 // navigation and later runs keep the own model; any input that joins the run at a tool boundary (owner input, another
-// completion, a Subagent update) ends the override, so it never answers on the cheap model.
+// completion, a Subagent update) or an extension's continuation ends the override, so it never answers on the cheap
+// model. The cheap-turn instruction is never stored: each request of the run gets it while the override lasts.
 import { readFileSync } from "node:fs";
 import type { Context } from "@earendil-works/chord/context";
 import { str, obj } from "@earendil-works/pi-schema";
 import {
-	AgentDoc, CompactionEntry, type Conversation, type ConversationId, defineExtension, defineTool,
+	AgentDoc, CompactionEntry, type Conversation, type ConversationId, defineExtension, defineTool, GenerationTask, hook,
 	InboxDoc, type InputSubmissionDraft, LiveDoc, type ModelRef, type SubmissionId, type Tx,
 } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -19,8 +20,11 @@ import { redact, sealed } from "./redact.ts";
 export const HAND_BACK = "hand_back";
 export const CHEAP_INSTRUCTION = `[Cheap wake-up] This turn runs on a cheaper model because the context was just compacted. If the result above needs no real work (tests passed, expected output), act on it briefly: report the outcome in a line or two and, if this Chat belongs to a Workstream, save it per the workstreams skill; then end the turn. If it needs real work (a failure to debug, a decision, code to change), call ${HAND_BACK} with a one-line reason and do nothing else.`;
 
-/** Each finished hand_back by its tool task, with the own model it named (a replay after a restart finds it). */
-export const CheapWakeDoc = defineDoc<{ handedBack: Record<string, ModelRef> }>({
+/**
+ * Each finished hand_back by its tool task, with the own model it named (a replay after a restart finds it) and the
+ * run's generation task (`run`), so a second call in the same run queues nothing.
+ */
+export const CheapWakeDoc = defineDoc<{ handedBack: Record<string, ModelRef & { run?: number }> }>({
 	kind: "workbench.cheap-wake",
 	version: 1,
 	scope: "conversation",
@@ -35,7 +39,8 @@ type Policy = { models: Record<string, { provider: string; model: string }>; tie
 const POLICY = JSON.parse(readFileSync(new URL("../../../skills/model-orchestration/references/routing-policy.json", import.meta.url), "utf8")) as Policy;
 const ids = (names: readonly string[]) => names.map((name) => POLICY.models[name]!.model);
 
-const heavy = (own: ModelRef) => [...ids(POLICY.tiers.strong ?? []), ...ids(POLICY.tiers.standard ?? []), ...ids(POLICY.reserve)].includes(own.modelId);
+/** A strong, standard or reserve tier model: one a light model is cheaper than. */
+export const heavy = (own: ModelRef) => [...ids(POLICY.tiers.strong ?? []), ...ids(POLICY.tiers.standard ?? []), ...ids(POLICY.reserve)].includes(own.modelId);
 
 /**
  * The routing policy's `light` tier (the `routine` role) model of `own`'s provider, when `own` is a heavier tier's
@@ -73,11 +78,30 @@ export async function submitWake(conversation: Conversation, draft: InputSubmiss
 		const now = await eligible(tx, conversation.id, draft);
 		const cheap = now === undefined ? undefined : cheapModel(now, available);
 		if (now === undefined || cheap === undefined) return conversation.submit(tx, draft);
-		const content = typeof draft.content === "string" ? `${draft.content}\n\n${CHEAP_INSTRUCTION}` : [...draft.content, { type: "text" as const, text: CHEAP_INSTRUCTION }];
-		// hand_back is deferred, so only this run offers it.
-		return conversation.submit(tx, { ...draft, content, override: { model: cheap, tools: [HAND_BACK] } });
+		// hand_back is deferred, so only this run offers it; the instruction rides on its requests (`cheapInstruction`).
+		return conversation.submit(tx, { ...draft, override: { model: cheap, tools: [HAND_BACK] } });
 	}, context);
 }
+
+/** A reopened host resumes a cheap run on the stored model: its override is dropped before anything is scheduled. */
+export async function dropOverride(conversation: Conversation): Promise<void> {
+	await conversation.commit(async (tx) => {
+		const live = await tx.doc(LiveDoc, conversation.id);
+		if (live.run?.override !== undefined) delete live.run.override;
+	}, context);
+}
+
+/** While the run's override offers hand_back, each request's newest user message (the delivery) carries the instruction. */
+const cheapInstruction = hook(GenerationTask, {
+	beforeRequest: async ({ messages }, api, c) => {
+		if ((await api.snapshot(LiveDoc, api.conversationId, c))?.run?.override?.tools?.includes(HAND_BACK) !== true) return undefined;
+		const at = messages.findLastIndex((m) => m.role === "user");
+		if (at < 0) return undefined;
+		const user = messages[at]!;
+		const parts = typeof user.content === "string" ? [{ type: "text" as const, text: user.content }] : user.content;
+		return { messages: messages.map((m, i) => (i === at ? ({ ...user, content: [...parts, { type: "text", text: `\n\n${CHEAP_INSTRUCTION}` }] } as typeof m) : m)) };
+	},
+});
 
 const sanitize = sealed(redact);
 const text = (value: string) => [{ type: "text" as const, text: value }];
@@ -88,24 +112,38 @@ const handBack = defineTool({
 	description: "End this cheap wake-up turn and hand the delivery to the Chat's own model, which runs next with your reason.",
 	parameters: obj({ reason: str({ minLength: 1, description: "One line: why this needs real work" }) }, { open: true }),
 	deferred: true,
+	// A direct call only: a nested call (codemode) never ends the run, so the cheap model would go on after it.
+	callers: ["model"],
 	replay: "safe",
 	execute: async (args, api, c: Context) => {
-		// Alone, or its terminate would not end the run: the own model would answer the other results, then the rerun.
-		if ((await batchSize(api, c)) > 1)
+		const key = String(api.taskId);
+		// A replay after a restart: this call already handed back.
+		const done = await api.commit(async (tx) => {
+			const found = (await tx.doc(CheapWakeDoc, api.conversationId)).handedBack[key];
+			return found === undefined ? undefined : { ...found };
+		}, c);
+		if (done !== undefined) return handedBack(done);
+		// The sole direct call of its batch, or its terminate would not end the run: the own model would answer the other results, then the rerun.
+		if ((await batchSize(api, c)) !== 1)
 			return { output: text(`Not handed back: ${HAND_BACK} must be called alone in its assistant tool batch. Call it again as the sole call.`), isError: true };
 		// Redacted whole, before the first line is cut: the reason becomes a new user message, not a tool argument.
 		const reason = sanitize(args.reason).split("\n", 1)[0]!.slice(0, 300);
 		const handle = (await api.conversation(api.conversationId, c))!;
 		const own = await api.commit(async (tx) => {
 			const doc = await tx.doc(CheapWakeDoc, api.conversationId);
-			const key = String(api.taskId);
-			// A replay after a restart: this call already handed back.
-			const done = doc.handedBack[key];
-			if (done !== undefined) return { ...done };
+			const again = doc.handedBack[key];
+			if (again !== undefined) return { ...again };
 			// Offered only by a cheap run's override, which input joining the run ends.
-			if ((await tx.doc(LiveDoc, api.conversationId)).run?.override === undefined) return undefined;
+			const run = (await tx.doc(LiveDoc, api.conversationId)).run;
+			if (run?.override === undefined) return undefined;
 			const model = (await tx.doc(AgentDoc, api.conversationId)).model;
 			if (model === undefined) return undefined;
+			// One rerun per cheap run: a second call in it records its receipt and queues nothing.
+			const runId = Number(run.taskId);
+			if (Object.values(doc.handedBack).some((entry) => entry.run === runId)) {
+				doc.handedBack[key] = { ...model, run: runId };
+				return { ...model };
+			}
 			// Queued behind the terminating round: it starts the next run, on the stored model.
 			await handle.submit(tx, {
 				type: "input",
@@ -113,7 +151,7 @@ const handBack = defineTool({
 				onAbort: "keep",
 				content: `The cheaper model handed this wake-up back (reason: ${reason}). Handle the delivery above yourself.`,
 			});
-			doc.handedBack[key] = { ...model };
+			doc.handedBack[key] = { ...model, run: runId };
 			return { ...model };
 		}, c);
 		if (own === undefined) return { output: text("No cheap wake-up turn is running; continue normally."), isError: true };
@@ -121,4 +159,4 @@ const handBack = defineTool({
 	},
 });
 
-export const cheapWakeExtension = defineExtension({ name: "workbench.cheap-wake", tools: [handBack] });
+export const cheapWakeExtension = defineExtension({ name: "workbench.cheap-wake", tools: [handBack], hooks: [cheapInstruction] });

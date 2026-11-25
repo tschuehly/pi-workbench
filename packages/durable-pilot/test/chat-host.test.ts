@@ -851,6 +851,110 @@ test("idle cache timer and cheap wake: a wake while the timer's cheap summary is
 	}
 });
 
+test("idle cache timer: a reopen in the same idle stretch never pays for a second summary after a truncated one", async () => {
+	const { store, cwd } = family("idle-truncated-reopen");
+	const first = await idleChat(store, cwd, () => 1_500);
+	await first.session.prompt({ operationId: "op-1", text: `pad:summary-length ${"x".repeat(330_000)}` });
+	await first.settled(1);
+	await first.until(() => first.warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+	await first.quiet();
+	await first.session.close();
+	// Viewed again before the cache entry expires: the timer fires at once, for the request already attempted.
+	const second = await idleChat(store, cwd, () => 1_500);
+	try {
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [SUMMARY], "one summary request for the stretch");
+	} finally {
+		await second.session.close();
+	}
+});
+
+test("idle cache timer: a Chat on Sonnet has no cheaper summary writer and never arms it", async () => {
+	const { store, cwd } = family("idle-sonnet-chat");
+	const { h, session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await h.root.configure({ model: { provider: "anthropic", modelId: "claude-sonnet-5-5" } }, context);
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "no cold summary on the Chat's own model");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: the owner choosing the cheap model during a cheap turn never arms the timer on it", async () => {
+	const { store, cwd } = family("idle-owner-cheap");
+	const gate = join(cwd, "turn-gate-file");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction");
+		const id = await submitWake(h.root, wakeDraft("job-1", `pad:turn-gate:${gate} ${"x".repeat(330_000)}`), h.models);
+		await until(() => turns(store).length === 2, "the cheap request");
+		await session.setModel("anthropic", "claude-sonnet-5-5");
+		writeFileSync(gate, "");
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.equal(turns(store)[1]!.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [SUMMARY], "the cheap turn armed nothing");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a new large turn that ends while a cancelled summary still unwinds arms the timer once it settles", async () => {
+	const { store, cwd } = family("idle-unwinding");
+	const gate = join(cwd, "summary-gate");
+	const { session, until, settled, markers, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the held summary request");
+		// The owner's turn cancels the summary, which unwinds only once its request returns.
+		await session.prompt({ operationId: "op-2", text: PAD });
+		await settled(2);
+		await wait(500);
+		writeFileSync(gate, "");
+		await quiet();
+		await until(async () => (await markers()) === 1, "the timer compaction for the newer turn", 10_000);
+		assert.deepEqual(summaries(store), [SUMMARY, SUMMARY]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: the Chat's model changing before the timer's admission sends no summary to the previous provider", async () => {
+	const { store, cwd } = family("idle-model-switch");
+	const { h, session, settled, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(300);
+		// The timer reads the Chat's model, then the owner switches to Terra before the compaction is admitted.
+		const agent = h.root.agent.bind(h.root);
+		let switched = false;
+		h.root.agent = (async (c: Parameters<typeof agent>[0]) => {
+			// The timer's own read of the model (its `status()` read comes first and must not switch).
+			const timer = /idleFire/.test(new Error().stack ?? "") && !/status/.test(new Error().stack ?? "");
+			const read = await agent(c);
+			if (timer && !switched) {
+				switched = true;
+				await h.root.configure({ model: { provider: "openai-codex", modelId: "gpt-6.1-terra" } }, context);
+			}
+			return read;
+		}) as typeof h.root.agent;
+		await wait(2_500);
+		await quiet();
+		assert.ok(switched, "the timer fired");
+		assert.deepEqual(summaries(store), [], "no summary on the previous provider's model");
+	} finally {
+		await session.close();
+	}
+});
+
 test("idle cache timer: a replayed prompt (fresh: false) leaves the timer armed", async () => {
 	const { store, cwd } = family("idle-replay");
 	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);

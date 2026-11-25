@@ -110,7 +110,9 @@ test("the host checkpoint never replaces a fresher one: a changed checkpoint, a 
 	await write({ checkpoint: healthy }, T0 + 3);
 	assert.equal(await latest(), "cp-model", "a stale mark since the baseline keeps it");
 	await write({ checkpoint: await ws.state("chat-1"), stale: () => false }, T0 + 4);
-	assert.match((await latest())!, /^cp-idle-/, "unchanged since the timer fired: the host note replaces it");
+	assert.equal(await latest(), "cp-model", "already stale when the timer fired: the host note keeps it");
+	assert.equal((await ws.session("chat-1"))!.checkpointStaleness?.checkpointId, "cp-model", "and its stale mark");
+	assert.ok(existsSync(note("ws-2", "chat-1", T0 + 4)), "the note file is still written");
 
 	const after = (await ws.store.inspect("ws-2")).revision;
 	await ws.store.append({ workstreamId: "ws-2", expectedRevision: after, idempotencyKey: "pending", records: [{ type: "session.pending", producer: "session", payload: { sessionId: "chat-2", associationKey: "chat-2" } }] });
@@ -143,7 +145,27 @@ test("the note path: the Workstream ID encoded as one folder, the Chat ID in the
 });
 
 test("the timer's summary comes from the provider's own Sonnet or Terra, never another provider's", () => {
-	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
-	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
-	assert.equal(idle.summaryModelFor({ provider: "github-copilot" }), undefined);
+	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-opus-5-5" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.2-sol" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
+	assert.equal(idle.summaryModelFor({ provider: "github-copilot", modelId: "claude-opus-5-5" }), undefined);
+});
+
+test("a Chat with no cheaper summary writer gets none: the writer itself, or a light-tier model", () => {
+	assert.equal(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-sonnet-5-5" }), undefined, "a Sonnet Chat");
+	assert.equal(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.1-terra" }), undefined, "a Terra Chat");
+	assert.equal(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6-luna" }), undefined, "a light-tier Luna Chat");
+});
+
+test("the stored checkpoint baseline is a digest: a failure reason's secret never reaches it, a changed reason still changes it", async () => {
+	const secret = "idleBaselineSecret-7f3a9c1e5b2d";
+	const ws = await workstream("ws-7", ["chat-1"]);
+	await ws.checkpoint("chat-1", { id: "cp-1", whatChanged: "W.", remains: "R.", next: "N." });
+	const fail = async (reason: string) => {
+		const { revision } = await ws.store.inspect("ws-7");
+		await ws.store.append({ workstreamId: "ws-7", expectedRevision: revision, idempotencyKey: `f-${String(revision)}`, records: [{ type: "checkpoint.failed", producer: "session", sourceSessionId: "chat-1", payload: { sessionId: "chat-1", reason } }] });
+		return ws.state("chat-1");
+	};
+	const first = await fail(`token ${secret} rejected`);
+	assert.ok(!first.includes(secret), `no secret in the baseline: ${first}`);
+	assert.notEqual(await fail("another reason"), first, "a changed failure still changes the baseline");
 });

@@ -57,7 +57,7 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  * - `spawn:<name> <message>` → call subagent spawn; `leaf:<message>` → call leaf;
  * - `ask:<text>` → call ask_user; `hand_back:<reason>` anywhere, while hand_back is offered → call it (`hand_back+read:`
  *   with a `read` in the same batch);
- * - `fail` → a non-retryable provider error;
+ * - `fail` → a non-retryable provider error; `turn-gate:<file>` anywhere → wait until that file exists (or the request is aborted);
  * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
  *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error (as is a summarized
  *   conversation containing `summary-fail`; one containing `summary-length` is cut off at its output cap (`length`);
@@ -78,7 +78,9 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const system = context.messages.flatMap((message) => (message.role === "system" ? [getSystemMessageText(message)] : [])).join("\n");
 		const last = messages.at(-1);
 		// A Working Mode block delivered with a prompt comes first; the script reads the user's text after it.
-		const raw = textOfMessage(last);
+		// A cheap wake-up's instruction (one line, cheap-wake.ts) rides on the delivery; the script reads the text without it.
+		const cheap = messages.some((m) => textOfMessage(m).includes("[Cheap wake-up]"));
+		const raw = textOfMessage(last).replace(/\n\n\[Cheap wake-up\][^\n]*/, "");
 		const withReminder = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
 		const block = withReminder !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		// An open-questions reminder rides last in a plain prompt; the script reads the user's text before it.
@@ -121,8 +123,14 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			...(ran.length === 0 ? {} : { ran }),
 			...(reasoning === undefined ? {} : { reasoning }),
 			...(modes.length === 0 ? {} : { modes }),
+			...(cheap ? { cheapInstruction: true } : {}),
 			tools: offered(context),
 		});
+		const turnGate = /turn-gate:(\S+)/.exec(text)?.[1];
+		while (turnGate !== undefined && !existsSync(turnGate)) {
+			if (streamOptions?.signal?.aborted === true) return fauxAssistantMessage([], { stopReason: "aborted" });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
 		if (options.hold !== undefined && options.holdOn !== undefined && text.startsWith(options.holdOn))
 			await options.hold(`request:${options.holdOn}`, streamOptions?.signal);
 		if (last?.role === "toolResult") {

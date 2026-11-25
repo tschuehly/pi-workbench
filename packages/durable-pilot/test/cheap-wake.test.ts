@@ -3,25 +3,29 @@
 // the turn on the own model.
 // In process, on the scripted model under Anthropic model names (scriptedProviders).
 import assert from "node:assert/strict";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { AgentDoc, type SubmissionId } from "@earendil-works/pi-durable";
+import { AgentDoc, defineExtension, GenerationTask, hook, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
 import { DEFAULT_COMPACTION, openChatHost } from "../src/chat.ts";
 import { CheapWakeDoc, cheapModel, cheapWakeExtension, submitWake } from "../src/cheap-wake.ts";
 import { ChatSession } from "../src/chat-session.ts";
 import { context } from "../src/host.ts";
 import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
-import { fakeAgentDir, logged } from "./chat-proc.ts";
+import { ChatHost, fakeAgentDir, family, live, logged, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
 process.env.PI_TELEMETRY_DIR = scratch("cheap-wake-telemetry");
+process.env.PI_BACKGROUND_BASH_ROOT = scratch("cheap-wake-jobs");
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("cheap-wake-agent");
-after(cleanup);
+after(() => {
+	for (const child of live) child.kill("SIGKILL");
+	cleanup();
+});
 
 const OWN = { provider: "anthropic", modelId: "claude-opus-5-5" };
 const LIGHT = { provider: "anthropic", id: "claude-sonnet-5-5" };
-type Request = { label: string; model?: string; tools: string[] };
+type Request = { label: string; model?: string; tools: string[]; cheapInstruction?: true };
 
 async function chat(label: string, existing?: string) {
 	const dir = existing ?? scratch(label);
@@ -310,5 +314,135 @@ test("model discovery that throws never blocks a delivery: ordinary wakes skip i
 		assertOwn(last, "a cheap wake whose discovery fails");
 	} finally {
 		await c.close();
+	}
+});
+
+const handBackTool = () => cheapWakeExtension.tools!.find((t) => t.name === "hand_back")!;
+const handedBackMessages = async (c: Awaited<ReturnType<typeof chat>>) =>
+	(await c.h.root.entries({}, 200, undefined, context)).items.filter((e) => e.model?.[0]?.role === "user" && JSON.stringify(e.model).includes("handed this wake-up back")).length;
+const until = async (done: () => boolean | Promise<boolean>, what: string) => {
+	const deadline = Date.now() + 15_000;
+	while (!(await done())) {
+		assert.ok(Date.now() < deadline, `no ${what} within 15 s`);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+};
+
+test("hand_back called from a codemode script is refused: the nested calls hand nothing back and queue no rerun", async () => {
+	const c = await compacted("cheap-nested");
+	try {
+		const code = "await tools.hand_back({ reason: 'first' }); await tools.hand_back({ reason: 'second' }); return 'x';";
+		await c.settle(await submitWake(c.h.root, { type: "input", content: `call:codemode ${JSON.stringify({ code })}`, whenBusy: "followUp", requestId: "job-nested" }, c.h.models));
+		await c.h.root.waitForIdle(context);
+		assert.equal(await handedBackMessages(c), 0, "no rerun queued by a nested call");
+		assert.deepEqual((await c.h.harness.snapshot(CheapWakeDoc, c.h.root.id, context))?.handedBack ?? {}, {}, "no hand-back receipt");
+		assert.deepEqual(c.requests().filter((r) => r.label.startsWith("The cheaper model handed")), [], "no own-model rerun");
+	} finally {
+		await c.close();
+	}
+});
+
+test("two hand_back calls in one cheap run queue one rerun", async () => {
+	const c = await compacted("cheap-two-calls");
+	const gate = join(c.dir, "bash-gate");
+	try {
+		const command = `while [ ! -f '${gate}' ]; do sleep 0.05; done`;
+		const id = await submitWake(c.h.root, { type: "input", content: `call:bash ${JSON.stringify({ command, description: "Wait", foreground: true })}`, whenBusy: "followUp", requestId: "job-hold" }, c.h.models);
+		// The cheap run holds at its bash call; two direct hand_back calls of that run (as the model would make in two rounds).
+		await until(async () => (await c.h.harness.snapshot(LiveDoc, c.h.root.id, context))?.tools !== undefined, "the held bash call");
+		assert.ok((await c.h.harness.snapshot(LiveDoc, c.h.root.id, context))?.run?.override !== undefined, "the cheap run is running");
+		const assistant = (await c.h.root.entries({ order: "descending" }, 20, undefined, context)).items.find((e) => e.model?.[0]?.role === "assistant")!;
+		const api = (taskId: number) => ({ conversationId: c.h.root.id, taskId, conversation: async () => c.h.root, commit: (fn: never, ctx: never) => c.h.root.commit(fn, ctx), getTask: async () => ({ input: { kind: "model", assistant: assistant.id } }) });
+		const run = (taskId: number) => (handBackTool().execute as (args: unknown, api: unknown, c: unknown) => Promise<{ isError?: boolean }>)({ reason: "needs work" }, api(taskId), context);
+		assert.equal((await run(900_001)).isError, undefined);
+		assert.equal((await run(900_002)).isError, undefined);
+		writeFileSync(gate, "");
+		await c.settle(id);
+		await c.h.root.waitForIdle(context);
+		assert.equal(await handedBackMessages(c), 1, "one rerun for the run");
+	} finally {
+		await c.close();
+	}
+});
+
+test("the cheap-turn instruction rides only on the cheap run's requests: joined owner input never sees it and history never stores it", async () => {
+	const c = await compacted("cheap-instruction");
+	try {
+		const wake = await c.startWake("job-1", "hand_back+read:x");
+		await c.settle(await c.prompt("owner steer", "steer"));
+		await c.settle(wake);
+		const all = c.requests();
+		assert.equal(all.find((r) => r.label.startsWith("Background bash job-1"))?.cheapInstruction, true, "the cheap request carries the instruction");
+		const owner = all.slice(all.findIndex((r) => r.label === "owner steer"));
+		assert.ok(owner.length > 0, JSON.stringify(all));
+		for (const r of owner) assert.equal(r.cheapInstruction, undefined, `${r.label}: no cheap-turn instruction on the own model`);
+		const stored = (await c.h.root.entries({}, 200, undefined, context)).items.map((e) => JSON.stringify(e.model ?? ""));
+		assert.ok(!stored.some((m) => m.includes("[Cheap wake-up]")), "the instruction is never stored in history");
+	} finally {
+		await c.close();
+	}
+});
+
+test("an extension's onYield continuation of a cheap run answers on the own model, without hand_back or the instruction", async () => {
+	const c = await compacted("cheap-yield");
+	try {
+		let continued = false;
+		c.h.registry.install(defineExtension({
+			name: "test.yield",
+			hooks: [hook(GenerationTask, {
+				onYield: (answer) => {
+					if (continued || !JSON.stringify(answer.content).includes("ok: Background bash job-1")) return undefined;
+					continued = true;
+					return { continue: "yield continuation" };
+				},
+			})],
+		}));
+		await c.wake("job-1", "all tests passed");
+		await c.h.root.waitForIdle(context);
+		const all = c.requests();
+		assert.equal(all.find((r) => r.label.startsWith("Background bash job-1"))?.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
+		const next = all.find((r) => r.label === "yield continuation");
+		assertOwn(next, "the continuation");
+		assert.equal(next!.cheapInstruction, undefined, "the continuation has no cheap-turn instruction");
+	} finally {
+		await c.close();
+	}
+});
+
+test("a cheap run a host kill interrupted resumes on the own model after the restart, without hand_back or the instruction", async () => {
+	const { store, cwd } = family("cheap-kill-mid-run");
+	const gate = join(cwd, "turn-gate-file");
+	// The real host process on the scripted model under the own model's name, so a kill is a real restart.
+	const args = ["--model", `${OWN.provider}/${OWN.modelId}`, "--scripted-providers"];
+	const completions = () => (logged(store) as unknown as Request[]).filter((l) => l.label.startsWith("Background bash"));
+	const first = new ChatHost(store, cwd, { args });
+	await first.ready;
+	await first.call("configure", { resources: {}, compaction: { keepRecentTokens: 1 } });
+	for (const [i, text] of ["one", "two", "three"].entries()) {
+		await first.call("prompt", { operationId: `op-${String(i)}`, text });
+		await first.idle(i + 1);
+	}
+	// A background job that ends after the compaction: its completion is the wake right after it, held by the gate its
+	// output names (split in the command, so the prompt itself is not held).
+	await first.call("prompt", { operationId: "op-bash", text: `call:bash ${JSON.stringify({ description: "Later", command: `while [ ! -e flag ]; do sleep 0.1; done; echo turn-""gate:${gate}` })}` });
+	await first.idle(4);
+	await first.call("compact", {});
+	await until(async () => (await first.call<{ messages: { source?: string }[] }>("transcript")).messages.some((m) => m.source === "compaction"), "the placed summary");
+	writeFileSync(join(cwd, "flag"), "");
+	await waitFor(() => completions().length === 1, "the cheap wake's request");
+	assert.equal(completions()[0]!.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
+	await first.kill();
+	const second = new ChatHost(store, cwd, { args });
+	try {
+		await second.ready;
+		await second.call("resume", { reason: "upgrade-restart" });
+		writeFileSync(gate, "");
+		await waitFor(() => completions().length >= 2, "the resumed request");
+		for (const r of completions().slice(1)) {
+			assertOwn(r, "the resumed request");
+			assert.equal(r.cheapInstruction, undefined, "no cheap-turn instruction after the restart");
+		}
+	} finally {
+		await second.close();
 	}
 });
