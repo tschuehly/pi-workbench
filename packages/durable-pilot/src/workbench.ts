@@ -274,9 +274,12 @@ export function validateQuestions(questions: readonly Question[], approval?: tru
 			const value = requireId(option.value, `option value of question ${id}`);
 			if (values.has(value)) throw new AskError(`Duplicate option value ${value} in question ${id}`);
 			values.add(value);
+			const label = requireText(option.label, `label of option ${value} in question ${id}`);
+			// The panel adds its own Custom choice; an agent's second one could never be picked as Custom.
+			if (/^custom$|\(custom\)$/iu.test(label.trim())) throw new AskError(`Option ${value} is labelled Custom; a Custom choice is always added, so drop this option`);
 			return {
 				value,
-				label: requireText(option.label, `label of option ${value} in question ${id}`),
+				label,
 				...(option.detail === undefined ? {} : { detail: requireText(option.detail, `detail of option ${value} in question ${id}`) }),
 				...(option.recommended === true ? { recommended: true } : {}),
 			};

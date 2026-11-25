@@ -234,6 +234,13 @@
         { "id": "flag", "question": "Ship?", "detail": "d", "kind": "boolean", "labels": ["Ship\nit", "Hold"] }
       ],
       "error": "labels of question flag must be two one-line texts of at most 40 characters, [true, false]"
+    },
+    {
+      "name": "option labelled Custom",
+      "questions": [
+        { "id": "q", "question": "Pick?", "detail": "d", "options": [{ "value": "keep", "label": "Keep it" }, { "value": "fix", "label": " Correct it (custom) " }] }
+      ],
+      "error": "Option fix is labelled Custom; a Custom choice is always added, so drop this option"
     }
   ]
 }
