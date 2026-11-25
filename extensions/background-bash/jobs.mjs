@@ -44,7 +44,9 @@ export function readTail(path, size) {
   const fd = openSync(path, "r");
   try { readSync(fd, buffer, 0, back + length, size - length - back); } finally { closeSync(fd); }
   const tail = buffer.subarray(back).toString("utf8").replace(/^\uFFFD+/u, "");
-  return length < size ? dropCutHead(buffer.toString("utf8"), tail.length) : tail;
+  if (length === size) return tail;
+  // Key boundaries are found in the text as the redactor will see it: terminal codes stripped (`cleanOutput`).
+  return dropCutHead(cleanOutput(buffer.toString("utf8")), cleanOutput(tail).length);
 }
 
 const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
@@ -127,10 +129,12 @@ export function launchJob({ root = defaultRoot(), id, command, description, cwd,
   }
   // --disable-sigusr1: no debugger a signal could open in this unfenced process (the fence also denies such signals).
   const runner = spawn(process.execPath, ["--disable-sigusr1", runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
-  runner.once("error", (error) => writeOnce(join(dir, "exit"), JSON.stringify({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() })));
+  // A job folder removed meanwhile (a lost registry) has nowhere to record the failure, and nothing ran.
+  const settle = (result) => { try { writeOnce(join(dir, "exit"), JSON.stringify(result)); } catch (error) { if (error.code !== "ENOENT") throw error; } };
+  runner.once("error", (error) => settle({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() }));
   runner.once("exit", () => {
     // No claim means no shell could have run. Never leave the blocking tool waiting on a dead pre-claim runner.
-    if (owned && !existsSync(join(dir, "claim"))) writeOnce(join(dir, "exit"), JSON.stringify({ error: "Runner ended before claiming the command; it was not run again", finishedAt: Date.now(), cleanup: { survivors: [] } }));
+    if (owned && !existsSync(join(dir, "claim"))) settle({ error: "Runner ended before claiming the command; it was not run again", finishedAt: Date.now(), cleanup: { survivors: [] } });
   });
   runner.unref();
   return true;

@@ -484,9 +484,10 @@ export class BackgroundBash {
 		} catch {
 			throw new Error("This command already ran; its job record has expired");
 		}
-		if (readJob(this.#root, id) === undefined) throw new Error("This command already ran; its job record has expired");
+		const launched = readJob(this.#root, id);
+		if (launched === undefined) throw new Error("This command already ran; its job record has expired");
 		this.#poke();
-		return { jobId: id, logPath: readJob(this.#root, id)!.logPath };
+		return { jobId: id, logPath: launched.logPath };
 	}
 
 	/** Claim the completion, submit it under the job's request ID, then record the receipt. */

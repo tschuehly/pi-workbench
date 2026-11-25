@@ -117,7 +117,10 @@ test("a byte cut through a key's opening or closing line masks the key and keeps
   const closing = `${pre}${BEGIN}\nKEYBODY${"A".repeat(56)}\n${END}\n${"z".repeat(12_000 - (END.length - 5) - 1 - diag.length - 1)}\n${diag}`;
   // The tail starts exactly at the opening line of a key that never ends.
   const exact = `${pre}${BEGIN}\nKEYBODY${"A".repeat(12_000 - BEGIN.length - 1 - 7)}`;
-  for (const [name, text] of [["opening", opening], ["exact", exact], ["closing", closing]]) {
+  // The same, with terminal colour inside the header (stripped before redaction).
+  const COLOURED = "-----BEGIN \u001b[31mPRIVATE\u001b[0m KEY-----";
+  const coloured = `${pre}${COLOURED}\nKEYBODY${"A".repeat(12_000 - COLOURED.length - 1 - 7)}`;
+  for (const [name, text] of [["opening", opening], ["exact", exact], ["coloured", coloured], ["closing", closing]]) {
     const logPath = join(dir, `${name}.log`);
     writeFileSync(logPath, text);
     const content = redact(completionContent({ id: "k", state: "failed", exitCode: 1, logPath, bytes: statSync(logPath).size }));
