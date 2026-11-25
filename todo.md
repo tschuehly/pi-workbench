@@ -15,6 +15,7 @@
 - [ ] Add a skill or tool for researching X (Twitter) posts and threads (Thomas, 2026-11-25). Candidates to compare: grok.com, the Grok bot on X, an X CLI, a Grok CLI, Cursor CLI (the pi-packages index lists `pi-cursor-sdk`). Pick by cost, whether it needs an API key versus a subscription, and whether it can read a post's replies and quotes.
 - [ ] Build a research agent that watches docs, X posts, blogs and RSS feeds and finds optimizations and improvements for Thomas's projects (Thomas, 2026-11-25). It should:
   - let Thomas add and remove blogs and RSS feeds to watch;
+  - monitor chosen people on X (Thomas, 2026-11-25): Thomas keeps a list of accounts, and the agent picks up their new posts (depends on the X research tool above);
   - accept links and X posts sent over Telegram;
   - feed each post through the ai-engineer tool;
   - analyze everything and give Thomas one weekly task in Pi Workbench to go over the findings.
