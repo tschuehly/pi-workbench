@@ -416,6 +416,8 @@ test("file-edit tools: a path is writable exactly where the Chat's commands coul
   // Astra re-check of 2604454: the path Durable writes (`@` stripped, spaces made plain) is among the approved ones.
   assert.ok(toolPaths("@src/a\u00A0b.ts", { cwd: app, env }).includes(join(app, "src", "a b.ts")));
   assert.ok(toolPaths("file:///x//file.txt", { cwd: app, env }).includes("/x/file.txt"), "normalized as Durable resolves it");
+  // Astra re-check of 97836da: codemode's OS-temp folders, written unfenced, are never a write or edit tool's target.
+  assert.match(await refusal(join(realpathSync(tmpdir()), "pi-codemode-x", "out.png")) ?? "", /^Blocked/);
   // The helper's reason is the text after a message's last ": ", never a file name; only EPERM is the fence.
   const cause = (stderr) => { const e = writeError(stderr, "/x", 1); return [e.code, /write fence/.test(e.message)]; };
   assert.deepEqual(cause("sh: /a/Operation not permitted/f: Is a directory\n"), ["EISDIR", false]);

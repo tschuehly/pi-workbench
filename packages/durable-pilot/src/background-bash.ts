@@ -12,7 +12,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
@@ -184,10 +184,12 @@ class FencedEnv extends NodeExecutionEnv {
 	}
 
 	override async createTempDir(prefix: string | undefined, c: Context): Promise<Result<string, FileError>> {
-		const made = await super.createTempDir(prefix, c);
 		// A TMPDIR inside home could lie in a grant, where a background job could swap the folder: fenced like any write.
-		const real = made.ok ? realOrNone(made.value) : undefined;
-		if (real !== undefined && outsideHome(real, process.env.HOME ?? homedir())) tempDirs.add(real);
+		// Only where OS temp itself lies outside home: no fenced command can then create or swap anything in it, so the
+		// folder made there is the one registered (never re-resolved after its creation).
+		const parent = realOrNone(tmpdir());
+		const made = await super.createTempDir(prefix, c);
+		if (made.ok && parent !== undefined && outsideHome(parent, process.env.HOME ?? homedir())) tempDirs.add(join(parent, basename(made.value)));
 		return made;
 	}
 
