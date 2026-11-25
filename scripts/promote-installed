@@ -34,11 +34,11 @@
 #   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [--to <workbench-rev> <pi-web-rev>] [delay-seconds]
 #       switch to the latest pair, with switch's lock, stale check and exit codes; exit 0 without a switch when up to date.
 #       --to is the latest pair the owner saw: refuses (exit 9, nothing changed) when the latest pair is another by now.
-#   promote-installed switch-workbench <workbench-rev>
+#   promote-installed switch-workbench <workbench-rev> --from <live pair>
 #       Prepare, then make current the release of that build and the live PI WEB build. The running daemon keeps
 #       the Durable host it started with until the next switch. Roll back by switching to the previous revision,
 #       which it prints.
-#   promote-installed switch-web <pi-web-rev>
+#   promote-installed switch-web <pi-web-rev> --from <live pair>
 #       Prepare, then restart only PI WEB's web service on the new build and make current the release of the live
 #       Pi Workbench build and that one. The session daemon, open sessions and their children keep
 #       running; browsers reconnect. Refuses (exit 5) when the code the session daemon loads or the
@@ -320,6 +320,16 @@ matches() { # <live> <given>: given is none for none, else a hex revision prefix
   [[ $2 =~ ^[0-9a-f]{7,40}$ && $1 != none ]] && [[ $1 == "$2"* || $2 == "$1"* ]]
 }
 
+baseline() { # check the approved pair while holding the writer lock
+  read -r lwb lpw < <(pair)
+  if ! matches "$lwb" "$1" || ! matches "$lpw" "$2"; then
+    echo "refusing: installed now is $lwb $lpw (workbench, pi-web), not the --from pair $1 $2. Nothing changed." >&2
+    echo "Someone switched after that pair was read, so the owner's approval was for another starting point: show the" >&2
+    echo "owner the live pair and ask for a fresh approval before proposing a switch --from $lwb $lpw." >&2
+    exit 8
+  fi
+}
+
 LOCK=$STORE/promote.lock
 mutex() { # macOS has flock(2) but no flock command. FD 9 holds the kernel lock until this shell exits.
   exec 9>>"$STORE/promote.mutex"
@@ -370,7 +380,8 @@ merges() { # <product> <installed> <latest>: TAB lines product, sha, subject of 
 }
 preview() { # <json 0|1>: the installed and latest pair and what lies between (PI WEB Install latest reads the JSON)
   local iwb ipw
-  iwb=$(full pi-workbench "$(live pi-workbench)") ipw=$(full pi-web "$(live pi-web)")
+  read -r iwb ipw < <(pair)
+  iwb=$(full pi-workbench "$iwb") ipw=$(full pi-web "$ipw")
   { merges pi-workbench "$iwb" "$LATEST_WB"; merges pi-web "$ipw" "$LATEST_PW"; } | node -e '
     const [json, me, workbench, piWeb, lwb, lpw] = process.argv.slice(1); let d = "";
     process.stdin.on("data", (c) => d += c).on("end", () => {
@@ -396,8 +407,12 @@ force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == check-hosts && $# -eq 2 ]] && { check_hosts "$2"; exit $?; }
 [[ ${1:-} == prune && $# -le 2 ]] && { [[ ${2:-} != --apply ]] || lock; prune_builds "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
-if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
+if [[ ${1:-} == switch-web || ${1:-} == switch-workbench ]]; then
+  [[ $# == 5 && $3 == --from ]] || { echo "usage: $ME $1 <rev> --from <live-workbench-rev> <live-pi-web-rev>" >&2; exit 2; }
   lock
+  baseline "$4" "$5"
+fi
+if [[ ${1:-} == switch-web ]]; then
   la=${LA:-$HOME/Library/LaunchAgents}; web=$la/$LABEL.web.plist
   entry() { sed -e "s/&apos;/'/g" "$1" | sed -n "s|.*exec node '\(.*\)/dist/server/$2'.*|\1|p"; }
   running=$(entry "$la/$LABEL.sessiond.plist" sessiond.js); old=$(entry "$web" index.js)
@@ -420,7 +435,7 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   up() { for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1; }
   swap "$old" "$pw"
   if up; then
-    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $ME switch-web ${old##*-}"
+    echo "web: $old -> $pw" | tee -a "$STORE/switch-web.log"; echo "roll back: $ME switch-web ${old##*-} --from $(pair)"
     [[ $old == "$pw" ]] || touch "$old.retired"
     prune_builds --apply || true
     exit 0
@@ -431,15 +446,14 @@ if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   up && exit 1
   echo "ROLLBACK FAILED: web service unhealthy on $old" >&2; exit 4
 fi
-if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
-  lock
+if [[ ${1:-} == switch-workbench ]]; then
   wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
   migrate || { echo "migrating to the release layout failed" >&2; exit 1; }
   pwt=$(target pi-web) || { echo "no PI WEB build installed; use switch" >&2; exit 1; }
   previous=$(target pi-workbench || true)
   r=$(release "$wb" "$pwt") && activate "$r" || { echo "repointing to $wb failed; $(live pi-workbench) stays installed" >&2; exit 1; }
   echo "pi-workbench$SUFFIX: ${previous:-none} -> $wb" | tee -a "$STORE/switch-workbench.log"
-  echo "roll back: $ME switch-workbench ${previous##*-}"
+  echo "roll back: $ME switch-workbench ${previous##*-} --from $(pair)"
   [[ -z $previous || $previous == "$wb" ]] || touch "$previous.retired"
   prune_builds --apply || true
   exit 0
@@ -476,13 +490,7 @@ if [[ $1 == switch ]]; then
   delay=${7:-$delay}
   [[ $# -le 7 && $delay =~ ^[0-9]+$ ]] || { echo "invalid switch delay" >&2; exit 2; }
   lock
-  lwb=$(live pi-workbench) lpw=$(live pi-web)
-  if ! matches "$lwb" "$5" || ! matches "$lpw" "$6"; then
-    echo "refusing: installed now is $lwb $lpw (workbench, pi-web), not the --from pair $5 $6. Nothing changed." >&2
-    echo "Someone switched after that pair was read, so the owner's approval was for another starting point: show the" >&2
-    echo "owner the live pair and ask for a fresh approval before proposing a switch --from $lwb $lpw." >&2
-    exit 8
-  fi
+  baseline "$5" "$6"
   if [[ -n $LATEST ]] && matches "$lwb" "$2" && matches "$lpw" "$3"; then echo "up to date: $lwb $lpw is the latest pair; nothing to switch"; exit 0; fi
 fi
 [[ $1 != prepare ]] || lock
@@ -546,6 +554,7 @@ trap 'launchctl bootout gui/$uid/$label' EXIT
 echo "running $label" >"$LOCK/next" && mv "$LOCK/next" "$LOCK/owner" || exit 1
 trap 'rm -rf "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
 sleep $delay
+[[ \$("$self" current) == "$lwb $lpw" ]] || { echo 'refused: installed pair changed before job started'; exit 8; }
 if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 if ! "$self" check-hosts "$pw"; then echo "refused \$(date -u +%FT%TZ): a host started during the delay that the new daemon cannot reattach; nothing changed"; exit 7; fi
 echo "start \$(date -u +%FT%TZ) wb=$wb pw=$pw"

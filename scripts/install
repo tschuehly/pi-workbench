@@ -31,6 +31,8 @@ say() { printf '%s\n' "$*"; }
 run() { if [[ $dry == 1 ]]; then printf '+'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 
 [[ $(cd "$wb" 2>/dev/null && pwd -P) == "$here" ]] || { echo "install: run it from $wb (this is $here)" >&2; exit 1; }
+# Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
+read -r from_wb from_pw < <("$promote" current) || { echo "install: cannot read the installed pair" >&2; exit 1; }
 if [[ ! -d $pw/.git ]]; then
   [[ ! -e $pw ]] || { echo "install: $pw exists but is not a git checkout" >&2; exit 1; }
   run git clone --branch pi-workbench "$repo" "$pw"
@@ -47,8 +49,6 @@ elif [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "
 else pw_rev="origin/pi-workbench (after the clone)"; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
-# Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
-read -r from_wb from_pw < <("$promote" current) || { echo "install: cannot read the installed pair" >&2; exit 1; }
 if [[ $from_wb == "${wb_rev:0:12}" && $from_pw == "${pw_rev:0:12}" ]]; then
   say "already installed: this pair is the installed one; no switch"
 elif [[ $dry == 1 ]]; then

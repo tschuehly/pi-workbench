@@ -82,7 +82,8 @@ function harness() {
     const job = spawnSync("bash", [join(jobs, latest, "job.sh")], { env: { ...env, ...extra }, encoding: "utf8" });
     return { scheduled, status: job.status, log: readFileSync(join(jobs, latest, "job.log"), "utf8") };
   };
-  return { root, home, projects, la, store, data, env, run, sw, bin, durable, snapshot, log, plist, switchDurable };
+  const partial = (cmd, rev, extra) => run([cmd, rev, "--from", ...run(["current"]).stdout.trim().split(" ")], extra);
+  return { root, home, projects, la, store, data, env, run, sw, partial, bin, durable, snapshot, log, plist, switchDurable };
 }
 
 /**
@@ -169,11 +170,11 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
 
   // switch-workbench and switch-web move only the Durable links and web service.
   const plists = h.durable();
-  const wb = h.run(["switch-workbench", wbRev(5)]);
+  const wb = h.partial("switch-workbench", wbRev(5));
   assert.equal(wb.status, 0, wb.stderr);
   assert.match(wb.stdout, /roll back: .* switch-workbench aaaaaaaaaaa3/);
   assert.equal(resolve(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
-  const web = h.run(["switch-web", pwRev(5)]);
+  const web = h.partial("switch-web", pwRev(5));
   assert.equal(web.status, 0, web.stderr);
   assert.match(web.stdout, /roll back: .* switch-web bbbbbbbbbbb3/);
   assert.equal(h.plist("web").ProgramArguments[3], `exec node '${build("pi-web", pwRev(5))}/dist/server/index.js'`);
@@ -192,6 +193,10 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
   assert.match(missing.stderr, /--from <live-workbench-rev> <live-pi-web-rev>[\s\S]*installed now: aaaaaaaaaaa1 bbbbbbbbbbb1/);
 
   // A pair read before another Chat switched: refused, nothing changed, the lock released.
+  for (const [cmd, rev] of [["switch-workbench", wbRev(2)], ["switch-web", pwRev(2)]]) {
+    assert.equal(h.run([cmd, rev]).status, 2);
+    assert.equal(h.run([cmd, rev, "--from", "none", "none"]).status, 8);
+  }
   const before = instanceState(h);
   for (const from of [["none", "none"], [short(wbRev(1)), short(pwRev(2))], ["main", short(pwRev(1))]]) {
     const stale = h.run(["switch", wbRev(2), pwRev(2), "--from", ...from, "0"]);
@@ -204,7 +209,7 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
 
   // The scheduled job holds the lock while it runs: every other promotion fails fast.
   writeFileSync(join(h.home, "job-running"), "");
-  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3)], ["switch-web", pwRev(3)], ["prune", "--apply"], ["prepare", wbRev(4), pwRev(4)]]) {
+  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3), "--from", wbRev(1), pwRev(1)], ["switch-web", pwRev(3), "--from", wbRev(1), pwRev(1)], ["prune", "--apply"], ["prepare", wbRev(4), pwRev(4)]]) {
     const busy = h.run(args);
     assert.equal(busy.status, 6, `${args[0]}: ${busy.stderr}`);
     assert.match(busy.stderr, /another promotion is in progress \(queued com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
@@ -218,9 +223,9 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
 
   // A live holder blocks; a dead one is taken over.
   put(join(lock, "owner"), `pid ${process.pid}\n`);
-  assert.equal(h.run(["switch-workbench", wbRev(3)]).status, 6);
+  assert.equal(h.partial("switch-workbench", wbRev(3)).status, 6);
   put(join(lock, "owner"), `pid ${deadPid()}\n`);
-  const takeover = h.run(["switch-workbench", wbRev(3)]);
+  const takeover = h.partial("switch-workbench", wbRev(3));
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stderr, /taking over a stale promotion lock/);
   assert.ok(!existsSync(lock));
@@ -624,10 +629,10 @@ test("release layout: a failed swap of current or a failed health check leaves t
   assert.equal(unhealthy.status, 1, unhealthy.log);
   assert.deepEqual(after(), before);
   // switch-workbench whose rename fails changes nothing either.
-  const wb = h.run(["switch-workbench", wbRev(4)], { FAIL_MV_CURRENT: "1" });
+  const wb = h.partial("switch-workbench", wbRev(4), { FAIL_MV_CURRENT: "1" });
   assert.equal(wb.status, 1);
   assert.equal(pair(), before.pair);
-  const ok = h.run(["switch-workbench", wbRev(4)]);
+  const ok = h.partial("switch-workbench", wbRev(4));
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(pair(), `${short(wbRev(4))} ${short(pwRev(2))}`);
   assert.equal(readlinkSync(join(h.store, "previous")), before.current);

@@ -26,7 +26,9 @@ I=$t/projects/pi-workbench/scripts/install
 # install must ask `current`), writes the job log (RESULT picks the outcome).
 cat >"$t/promote" <<'EOF'
 #!/usr/bin/env bash
-if [[ $1 == current ]]; then cat "$HOME/pair" 2>/dev/null || echo "none none"; exit 0; fi
+if [[ $1 == current ]]; then
+  [[ -z ${BEFORE_CLONE:-} || ! -d $PI_WORKBENCH_PROJECTS/pi-web ]] || exit 1
+  cat "$HOME/pair" 2>/dev/null || echo "none none"; exit 0; fi
 echo "promote $* env=${PI_PROMOTE_DURABLE_ENV:-}" >>"$HOME/calls"
 [[ $1 == --force ]] && shift
 s=$HOME/.pi-workbench/installed-durable; mkdir -p "$s/jobs/j"
@@ -47,7 +49,7 @@ check "dry run: exit 0, prints the clone, nothing cloned or called" test "$code"
 grep -q "git clone --branch pi-workbench" "$t/out" && ok "dry run: names the PI WEB clone" || fail "dry run: names the PI WEB clone"
 
 wb_rev=$(git -C "$t/wb.git" rev-parse main) pw_rev=$(git -C "$t/pw.git" rev-parse pi-workbench)
-code=$(PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=/x" rc "$I")
+code=$(BEFORE_CLONE=1 PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=/x" rc "$I")
 check "fresh install: exit 0" test "$code" = 0
 check "fresh install: PI WEB cloned on branch pi-workbench" test "$(git -C "$t/projects/pi-web" branch --show-current)" = pi-workbench
 check "fresh install: switch to both tips, environment passed through" grep -qx "promote switch $wb_rev $pw_rev --from none none 0 env=GIT_CONFIG_GLOBAL=/x" "$HOME/calls"

@@ -84,8 +84,8 @@ After a promotion the same labels and PIDs are still there, with their old `revi
 P=~/IdeaProjects/pi-workbench.durable-installed/scripts/promote-installed
 $P current                                                  # the installed pair: <wb-sha> <pw-sha>
 $P switch <wb-sha> <pw-sha> --from <live-wb> <live-pw>      # full: both services; --from is what `current` printed
-$P switch-workbench <wb-sha>                                # Workbench plugin and skills only
-$P switch-web <pw-sha>                                      # PI WEB web/API only
+$P switch-workbench <wb-sha> --from <live pair>                                # Workbench plugin and skills only
+$P switch-web <pw-sha> --from <live pair>                                      # PI WEB web/API only
 ```
 
 - `switch` keeps Durable Chats running: it restarts only `com.pi-web-durable.sessiond` and `.web`, never a `com.pi-workbench.durable-host.*` job. Streams, subagents, Workers, background bash and open questions go on in their hosts; the new daemon reattaches every host and browsers reconnect. Chats opened before the first switch with launchd hosts ran as the daemon's children; that one switch still closes them, and they reopen paused.
