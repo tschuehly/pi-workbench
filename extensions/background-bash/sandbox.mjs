@@ -333,7 +333,9 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const piWeb = piWebSockets(env, home);
   const net = { ports, sockets: [...piWeb, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
-  // PI WEB's folders are unreadable too: host plists, launch nonces and stores (never one holding home itself).
-  const hidden = [...rules.hidden, ...piWeb.filter((dir) => dir !== real(home) && !inside(real(home), dir))];
+  // Host launch files contain the nonce; session stores and logs remain readable to research and orientation tasks.
+  const hostDirs = [...new Set([join(env.PI_WEB_DATA_DIR || join(home, ".pi-web-durable"), "hosts"), env.PI_WEB_DURABLE_HOST_DIR]
+    .filter((dir) => typeof dir === "string" && dir !== "").map((dir) => real(resolve(dir))))];
+  const hidden = [...rules.hidden, ...hostDirs];
   return { file: bin, args: sandboxArgs({ ...rules, hidden, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }
