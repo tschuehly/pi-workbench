@@ -384,7 +384,7 @@ test("pnpm 12's lock folder: XDG_RUNTIME_DIR is one user-only folder outside the
   // Anything but a real folder is never handed out.
   rmSync(runtime, { recursive: true });
   symlinkSync(mkdtempSync(join(root, "elsewhere-")), runtime);
-  assert.equal(fencedEnv({}, fake, undefined).XDG_RUNTIME_DIR, undefined);
+  assert.equal(fencedEnv({ XDG_RUNTIME_DIR: "/tmp" }, fake, undefined).XDG_RUNTIME_DIR, undefined, "nor an inherited one");
   const g = grants({ cwd: fake, home: fake });
   assert.ok(g.write.includes(runtime) && g.locked.includes(runtime), "contents writable, the folder itself locked");
 });

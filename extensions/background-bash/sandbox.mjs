@@ -19,6 +19,9 @@ const AGENT_CACHES = ".pi-workbench/sandbox-caches";
 // fence grants. One folder for every fenced job (they all lock the shared agent store), outside the agent caches so no
 // fenced command can replace it or change its mode: only its contents are granted.
 const RUNTIME = ".pi-workbench/sandbox-runtime";
+// shortcut: a job can plant a file where pnpm's lock folder goes and break later fenced installs, like it can break
+// the shared agent store itself; delete the entry to recover. Upgrade to per-job store and runtime if this happens.
+
 // Seeded once from Thomas's copy as an APFS clone (no extra disk until changed), so a fenced Playwright does not
 // download the same browsers again; later changes never flow back. Only direct children of the agent caches folder,
 // which no fenced command can rename or replace (a grant's own folder), so no planted symlink redirects the copy.
@@ -249,8 +252,9 @@ export function fencedEnv(env, home, grantedTmp) {
   const runtime = join(real(home), RUNTIME);
   for (const [from, to] of SEEDS) seed(join(real(home), from), join(caches, to), real(home));
   const gradleCaches = join(real(home), ".gradle", "caches");
+  const { XDG_RUNTIME_DIR: _inherited, ...rest } = env;
   return {
-    ...env,
+    ...rest,
     // shortcut: no PI_TMP grant leaves TMPDIR unwritable (temp files fail visibly); every Pi-started command has one.
     ...(grantedTmp === undefined ? {} : { TMPDIR: `${shortTmp(real(home), grantedTmp)}/` }),
     GRADLE_USER_HOME: join(caches, "gradle"),
