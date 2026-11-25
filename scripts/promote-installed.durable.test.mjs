@@ -34,7 +34,7 @@ function harness() {
     if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
   // print: a scheduled switch job runs while $HOME/job-running exists.
-  shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] && echo "state = running"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
+  shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
   // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
   shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
@@ -207,7 +207,7 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
   for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3)], ["switch-web", pwRev(3)]]) {
     const busy = h.run(args);
     assert.equal(busy.status, 6, `${args[0]}: ${busy.stderr}`);
-    assert.match(busy.stderr, /another promotion is in progress \(job com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
+    assert.match(busy.stderr, /another promotion is in progress \(queued com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
   }
   assert.equal(jobs(), 2);
   // Its end releases the lock.
@@ -223,6 +223,17 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
   assert.equal(takeover.status, 0, takeover.stderr);
   assert.match(takeover.stderr, /taking over a stale promotion lock/);
   assert.ok(!existsSync(lock));
+});
+
+test("a displaced queued job cannot run or unlock its replacement", () => {
+  const h = harness();
+  assert.equal(h.sw(wbRev(1), pwRev(1)).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs"))[0]);
+  assert.equal(h.sw(wbRev(2), pwRev(2)).status, 0); // first job no longer registered
+  const owner = join(h.store, "promote.lock/owner"), next = readFileSync(owner, "utf8");
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 6);
+  assert.equal(readFileSync(owner, "utf8"), next);
+  assert.equal(h.run(["current"]).stdout, "none none\n");
 });
 
 test("switch waits 3 seconds by default", () => {

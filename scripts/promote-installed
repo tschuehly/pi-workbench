@@ -305,30 +305,30 @@ matches() { # <live> <given>: given is none for none, else a hex revision prefix
 }
 
 LOCK=$STORE/promote.lock
-held() { # <owner>: the holder still runs (this script's pid; a switch job while launchd runs it or its scheduler lives)
-  case $1 in
-    "pid "*) kill -0 "${1#pid }" 2>/dev/null;;
-    "job "*) set -- $1; kill -0 "$3" 2>/dev/null || launchctl print "gui/$(id -u)/$2" 2>/dev/null | grep -q 'state = running';;
-    *) (( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || echo 0) < 60 ));; # just created, owner not yet written
-  esac
+mutex() { # macOS has flock(2) but no flock command. FD 9 holds the kernel lock until this shell exits.
+  exec 9>>"$STORE/promote.mutex"
+  /usr/bin/perl -MFcntl=:flock -e 'open my $fd, ">&=9" or die $!; flock($fd, LOCK_EX | ($ARGV[0] eq "wait" ? 0 : LOCK_NB)) or exit 6' "$1"
 }
-unlock() { [[ $(cat "$LOCK/owner" 2>/dev/null) == "$1" ]] && rm -rf "$LOCK" || true; }
-lock() { # one promotion at a time, released on exit; a switch hands it to its job
-  local owner
+busy() {
+  echo "refusing: another promotion is in progress ($1; lock $LOCK). Nothing changed." >&2
+  echo "When it has finished, read the installed pair again ($ME current) and ask the owner for a fresh approval." >&2
+  exit 6
+}
+lock() {
+  local owner kind who pid
   mkdir -p "$STORE"
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    owner=$(cat "$LOCK/owner" 2>/dev/null || true)
-    if held "$owner"; then
-      echo "refusing: another promotion is in progress (${owner:-starting}; lock $LOCK). Nothing changed." >&2
-      echo "When it has finished, read the installed pair again ($ME current) and ask the owner for a fresh approval." >&2
-      exit 6
-    fi
-    echo "taking over a stale promotion lock (${owner:-no owner})" >&2
-    rm -rf "$LOCK"
-    mkdir "$LOCK" 2>/dev/null || { echo "refusing: another promotion just took the lock $LOCK" >&2; exit 6; }
-  fi
-  echo "pid $$" >"$LOCK/owner"
-  trap 'unlock "pid $$"' EXIT
+  mutex now || busy 'active writer'
+  [[ -d $LOCK ]] || return 0
+  owner=$(cat "$LOCK/owner" 2>/dev/null || true); read -r kind who pid <<<"$owner"
+  case $kind in
+    pid) kill -0 "$who" 2>/dev/null && busy "$owner";; # pre-mutex promotion
+    job) if kill -0 "${pid:-0}" 2>/dev/null || launchctl print "gui/$(id -u)/$who" >/dev/null 2>&1; then busy "$owner"; fi;;
+    queued) if launchctl print "gui/$(id -u)/$who" >/dev/null 2>&1; then busy "$owner"; fi;;
+    running) :;; # a live new job would still hold the kernel lock
+    *) busy 'unknown owner';;
+  esac
+  echo "taking over a stale promotion lock ($owner)" >&2
+  rm -rf "$LOCK"
 }
 
 full() { # <product> <12-character rev or none>: the full revision when its integration checkout knows it
@@ -458,6 +458,7 @@ if [[ $1 == switch ]]; then
     echo "switch needs the installed pair it replaces: $ME switch <workbench-rev> <pi-web-rev> --from <live-workbench-rev> <live-pi-web-rev> [delay]" >&2
     echo "Read the live pair with: $ME current (installed now: $(live pi-workbench) $(live pi-web))" >&2; exit 2; }
   delay=${7:-$delay}
+  [[ $# -le 7 && $delay =~ ^[0-9]+$ ]] || { echo "invalid switch delay" >&2; exit 2; }
   lock
   lwb=$(live pi-workbench) lpw=$(live pi-web)
   if ! matches "$lwb" "$5" || ! matches "$lpw" "$6"; then
@@ -481,7 +482,8 @@ rel=$(release "$wb" "$pw") || { echo "creating the release for $wb and $pw faile
 
 uid=$(id -u)
 self=$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")
-job=$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$STORE/jobs"
+job=$(mktemp -d "$STORE/jobs/$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
 mkdir -p "$job/backup"
 label=$JOBLABEL.$(basename "$job")
 # The new services' plists, written now so a failure stops before anything changes. `pi-web install` cannot write them:
@@ -519,7 +521,13 @@ export PATH=$PATH
 # launchd starts this without the caller's environment; its own calls of this script must act on the same trial.
 export PI_WORKBENCH_PROJECTS=$(printf %q "$PROJECTS")${T:+ PI_PROMOTE_DURABLE_TRIAL=$(printf %q "$T") PI_PROMOTE_DURABLE_PORT=$PORT}
 exec >>"$job/job.log" 2>&1
-trap '[[ \$(cat "$LOCK/owner" 2>/dev/null) == "job $label $$" ]] && rm -rf "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
+STORE=$(printf %q "$STORE")
+$(declare -f mutex)
+mutex wait || exit 6
+trap 'launchctl bootout gui/$uid/$label' EXIT
+[[ \$(cat "$LOCK/owner" 2>/dev/null) == "queued $label" ]] || { echo 'refused: job no longer owns the reservation'; exit 6; }
+echo "running $label" >"$LOCK/next" && mv "$LOCK/next" "$LOCK/owner" || exit 1
+trap 'rm -rf "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
 sleep $delay
 if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
 if ! "$self" check-hosts "$pw"; then echo "refused \$(date -u +%FT%TZ): a host started during the delay that the new daemon cannot reattach; nothing changed"; exit 7; fi
@@ -598,6 +606,8 @@ plutil -insert Label -string "$label" "$job/job.plist"
 plutil -insert ProgramArguments -array "$job/job.plist"
 plutil -insert ProgramArguments.0 -string "$job/job.sh" "$job/job.plist"
 plutil -insert RunAtLoad -bool true "$job/job.plist"
-echo "job $label $$" >"$LOCK/owner" # the job holds the lock until it ends
+mkdir "$job/reservation"
+echo "queued $label" >"$job/reservation/owner"
+mv "$job/reservation" "$LOCK"
 launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -rf "$LOCK"; exit 1; }
 echo "scheduled $label in ${delay}s; log: $job/job.log"
