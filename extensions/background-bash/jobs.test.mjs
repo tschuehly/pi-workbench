@@ -123,7 +123,7 @@ test("a byte cut through a key's opening or closing line masks the key and keeps
   // A 12,001-byte log whose cut falls just after the ESC of a leading colour code.
   const ESC_CODE = "\u001b[38;2;255;128;0m";
   // A marker at the body's end too: the miscounted cut kept only the last characters.
-  const insideCode = `${ESC_CODE}DIAG\n${BEGIN}\nKEYBODY${"A".repeat(12_001 - ESC_CODE.length - 5 - BEGIN.length - 1 - 14)}KEYBODY`;
+  const insideCode = `${ESC_CODE}DIAG\n${BEGIN}\nKEYBODY${"A".repeat(12_001 - ESC_CODE.length - 5 - BEGIN.length - 1 - 15)}\nKEYBODY`;
   for (const [name, text] of [["opening", opening], ["exact", exact], ["coloured", coloured], ["inside a code", insideCode], ["closing", closing]]) {
     const logPath = join(dir, `${name}.log`);
     writeFileSync(logPath, text);
