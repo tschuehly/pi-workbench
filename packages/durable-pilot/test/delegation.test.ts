@@ -1928,9 +1928,9 @@ test("/full-access survives PI WEB's upgrade restart (the close answer, handed b
 	await forged.close();
 	const raced = open(store, cwd, env, ["--full-access-nonce", nonce]);
 	await raced.ready;
-	await raced.call("resume", { reason: "upgrade-restart" });
+	await assert.rejects(raced.call("resume", { reason: "upgrade-restart" }), /not this launch's upgrade nonce/);
 	await raced.call("resume", { reason: "upgrade-restart", fullAccess: nonce });
-	assert.equal(await access(raced), "off", "another resume ran first: the nonce no longer turns it on");
+	assert.equal(await access(raced), "on", "the refused bare resume did not consume the owner's grant");
 	await raced.close();
 	const upgraded = open(store, cwd, env, ["--full-access-nonce", nonce]);
 	await upgraded.ready;

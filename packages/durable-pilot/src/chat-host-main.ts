@@ -290,10 +290,10 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	resume: (params) => {
 		if (params.reason !== "upgrade-restart") throw new Error("resume needs reason upgrade-restart");
 		// Full access carried over from the old host: only a resume repeating the nonce PI WEB put in this host's launch
-		// arguments for its upgrade restart, and only before any other resume ran (ChatSession.resume). A wrong nonce is
+		// arguments for its upgrade restart, and only before any other resume ran (ChatSession.resume). A missing or wrong nonce is
 		// refused whole (nothing resumes, the nonce stays for PI WEB's own resume); one already used, or none, is ignored.
 		const granted = fullAccessNonce !== undefined && params.fullAccess === fullAccessNonce;
-		if (fullAccessNonce !== undefined && params.fullAccess !== undefined && !granted) throw new Error("resume refused: fullAccess is not this launch's upgrade nonce");
+		if (fullAccessNonce !== undefined && !granted) throw new Error("resume refused: fullAccess is not this launch's upgrade nonce");
 		if (granted) fullAccessNonce = undefined;
 		else if (params.fullAccess !== undefined) console.error("resume: fullAccess ignored (no upgrade nonce in this launch, or already used)");
 		return session.resume("upgrade-restart", granted);
