@@ -67,6 +67,7 @@
 #   the host's protocol in its revision folder). prune keeps every build a running host runs from.
 #   Throwaway trials (spec AC4): PI_PROMOTE_DURABLE_TRIAL=<folder> and PI_PROMOTE_DURABLE_PORT=<port> (with their own
 #   PI_WORKBENCH_PROJECTS) keep builds, data and plists in that folder, under launchd labels com.pi-workbench.durable-trial.*;
+#   the trial's service plists carry those three, so this script run from the trial PI WEB (Install latest) acts on the trial;
 #   PI_PROMOTE_DURABLE_ENV="K=V ..." adds or overrides service environment (no spaces in values), on the real
 #   instance as on a trial, e.g. PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
 #   Each switch keeps the current plists' extra keys (not the ones it sets itself) and merges this over them;
@@ -479,6 +480,8 @@ label=$JOBLABEL.$(basename "$job")
 # The new services' plists, written now so a failure stops before anything changes. `pi-web install` cannot write them:
 # its labels and log folder (com.pi-web.*) are fixed (pi-web src/nativeServices/servicePlan.ts, src/cli.ts). Same keys.
 mkdir -p "$job/new"
+# PI WEB's Install latest runs this script from the web service: a trial's services must name the trial, or it acts on the real store.
+trialenv=(); [[ -n $T ]] && trialenv=(PI_PROMOTE_DURABLE_TRIAL="$T" PI_PROMOTE_DURABLE_PORT=$PORT PI_WORKBENCH_PROJECTS="$PROJECTS")
 for s in sessiond web; do
   e=sessiond.js; [[ $s == web ]] && e=index.js
   # Extra keys of the current plist survive a promotion without PI_PROMOTE_DURABLE_ENV (an install's GIT_CONFIG_GLOBAL);
@@ -499,7 +502,7 @@ for s in sessiond web; do
     PI_WEB_DATA_DIR="$DATA" PI_WEB_CONFIG="$DATA/config.json" PI_WEB_PORT=$PORT PI_WEB_PI_PACKAGE_AUTO_INSTALL=0 \
     PI_WEB_PI_PACKAGE_DIR="$pw/node_modules/@earendil-works/pi-coding-agent" \
     PI_WEB_DURABLE_HOST="$wb/packages/durable-pilot/src/chat-host-main.ts" PI_WEB_DURABLE_DEFAULT=1 \
-    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL PI_WEB_DURABLE_AUTO_UPGRADE=1 -- $EXTRA |
+    PI_WEB_DURABLE_HOST_LAUNCHD=$HOSTLABEL PI_WEB_DURABLE_AUTO_UPGRADE=1 ${trialenv[@]+"${trialenv[@]}"} -- $EXTRA |
     plutil -convert xml1 -o "$job/new/$LABEL.$s.plist" - || { echo "writing $LABEL.$s.plist failed" >&2; exit 1; }
 done
 cat >"$job/job.sh" <<EOF

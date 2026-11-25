@@ -486,8 +486,13 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
       PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(2))}/node_modules/@earendil-works/pi-coding-agent`,
       PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(2))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
       PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AUTO_UPGRADE: "1", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
+      PI_PROMOTE_DURABLE_TRIAL: trial, PI_PROMOTE_DURABLE_PORT: "8516", PI_WORKBENCH_PROJECTS: projects,
     });
   }
+  // PI WEB's Install latest runs the script with the web service's environment: it must act on the trial, not the real store.
+  const fromWeb = spawnSync("bash", [script, "current"], { env: { ...h.env, ...plist("web").EnvironmentVariables }, encoding: "utf8" });
+  assert.equal(fromWeb.stdout.trim(), `${short(wbRev(2))} ${short(pwRev(2))}`, fromWeb.stderr);
+  assert.notEqual(h.run(["current"]).stdout.trim(), fromWeb.stdout.trim());
   assert.equal(resolve(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
   assert.equal(readlinkSync(join(data, "plugins/pi-workbench")), join(projects, "pi-workbench.durable-installed/packages"));
 
