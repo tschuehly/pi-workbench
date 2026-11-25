@@ -15,7 +15,7 @@ Pi has no include mechanism: merge the fragment into the live file by hand, pres
 personal fields (theme, models, packages). Pi reads settings at process start, so the merged values
 reach the lead and every child Pi launched afterwards; restart running sessions to apply them.
 
-In `packages`, replace **only** the npm Monitor entry with the pinned git entry in the template; do not replace the array. Fully restart existing CLI sessions and Durable hosts rather than hot-reloading old poll timers. The Durable allowlist checks the installed package by name and launch-policy capability, not a second source list.
+In `packages`, replace **only** the npm Monitor entry with the pinned git entry in the template; do not replace the array. Fully restart existing CLI sessions and Durable hosts rather than hot-reloading old poll timers: a CLI `/reload` keeps the old runtime's poll timers, which run unfenced until restart. Never keep both Monitor entries: the CLI does not refuse the pair (Durable does). Durable resolves packages without installing, so run `pi install <the git entry>` once before restarting Durable hosts; until then Durable has no Monitor tool (it fails closed). The Durable allowlist checks the installed package by name and launch-policy capability, not a second source list.
 
 Why these values:
 
