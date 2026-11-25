@@ -294,15 +294,16 @@ export const piWebSockets = (env, home) => [...new Set([env.PI_WEB_DATA_DIR, joi
   .filter(given).map((path) => real(resolve(path))))];
 
 /**
- * PI WEB's TCP ports: its web/API port (PI_WEB_PORT, else its config file's `port`, and the stock 8504 and Durable 8506)
- * and the sessiond port, which also serves the owner's unfenced shell route. Digits only: they enter the profile as text.
- * shortcut: PORT (PI WEB's fallback) is left out, it names any dev server; and a port-0 sessiond (tests only) is unknown.
+ * PI WEB's TCP ports: its web/API port (PI_WEB_PORT, PORT, its config file's `port`, and the stock 8504 and Durable 8506)
+ * and the sessiond port. Like both listeners, coerce with Number; only normalized TCP ports enter the profile.
  */
 export function piWebPorts(env, home) {
   const config = given(env.PI_WEB_CONFIG) ? resolve(env.PI_WEB_CONFIG) : join(given(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : join(home, ".config"), "pi-web", "config.json");
   let configured;
   try { configured = JSON.parse(readFileSync(config, "utf8"))?.port; } catch { /* no config file: the defaults */ }
-  return [...new Set([env.PI_WEB_PORT, configured, "8504", "8506", env.PI_WEB_SESSIOND_PORT].map(String).filter((port) => /^\d{1,5}$/.test(port) && Number(port) > 0))];
+  return [...new Set([env.PI_WEB_PORT ?? env.PORT, configured, 8504, 8506, env.PI_WEB_SESSIOND_PORT]
+    .filter((port) => typeof port === "string" || typeof port === "number").map(Number)
+    .filter((port) => Number.isInteger(port) && port > 0 && port <= 65535).map(String))];
 }
 
 /**

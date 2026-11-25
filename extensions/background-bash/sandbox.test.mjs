@@ -329,7 +329,7 @@ test("the port deny rule covers PI WEB's web port (variable, config file, defaul
   assert.deepEqual(piWebPorts({ PI_WEB_PORT: "9000", PI_WEB_CONFIG: config, PI_WEB_SESSIOND_PORT: "9200" }, "/x/home"), ["9000", "9100", "8504", "8506", "9200"]);
   mkdirSync(join(root, "xdg", "pi-web"), { recursive: true });
   writeFileSync(join(root, "xdg", "pi-web", "config.json"), JSON.stringify({ port: 9300 }));
-  assert.deepEqual(piWebPorts({ XDG_CONFIG_HOME: join(root, "xdg"), PI_WEB_SESSIOND_PORT: "0", PORT: "3000" }, "/x/home"), ["9300", "8504", "8506"]);
+  assert.deepEqual(piWebPorts({ XDG_CONFIG_HOME: join(root, "xdg"), PI_WEB_SESSIOND_PORT: "9.322e3", PORT: "9321" }, "/x/home"), ["9321", "9300", "8504", "8506", "9322"]);
 });
 
 test("the Seatbelt profile denies host files, while Durable stores and logs remain readable, and preserves port, socket and process-info rules", () => {
@@ -359,7 +359,7 @@ test("fenced commands cannot read host launch files, but can read Durable stores
   try {
     const sessiond = await listen(0);
     const web = await listen(0);
-    writeFileSync(config, JSON.stringify({ port: web.address().port }));
+    writeFileSync(config, "{}");
     const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
     const read = (path) => `cat "${path}" >/dev/null 2>&1 && echo READ || echo UNREADABLE`;
     const job = await run([
@@ -368,7 +368,7 @@ test("fenced commands cannot read host launch files, but can read Durable stores
       read("$HOME/.pi-web-durable/durable/chat/session.sqlite"), read("$HOME/.pi-web-durable/logs/host.log"),
       `ps -o command= -p ${outsider.pid} 2>/dev/null | grep -q sleep && echo OUTSIDER_SEEN || echo OUTSIDER_HIDDEN`,
       "sleep 5 & ps -o command= -p $! | grep -q sleep && echo CHILD_SEEN || echo CHILD_HIDDEN; kill $!",
-    ].join("; "), { env: { PI_WEB_SESSIOND_PORT: String(sessiond.address().port), PI_WEB_CONFIG: config } });
+    ].join("; "), { env: { PI_WEB_SESSIOND_PORT: `${sessiond.address().port}e0`, PORT: String(web.address().port), PI_WEB_PORT: undefined, PI_WEB_CONFIG: config } });
     assert.equal(job.state, "complete", job.error);
     assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "UNREADABLE", "READ", "READ", "OUTSIDER_HIDDEN", "CHILD_SEEN"]);
   } finally {
