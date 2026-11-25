@@ -163,7 +163,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const host = new ChatHost(store, cwd);
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
-	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview"], "the gated PI WEB operations this host supports");
+	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "ask-images"], "the gated PI WEB operations this host supports");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
@@ -335,7 +335,7 @@ type Status = Transcript["status"] & {
 	attentionRequest?: { id: string; reason: string };
 	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
 };
-type Logged = { label: string; workingMode?: number; sections?: string[] };
+type Logged = { label: string; workingMode?: number; sections?: string[]; images?: number };
 const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
 const mode = (status: Status) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
 const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
@@ -651,6 +651,35 @@ test("crash row question: an open set survives a kill, a stale answer is refused
 	assert.equal(transcript.messages.filter((m) => m.customType === "pi-web.ask.answers").length, 1);
 	assert.equal(transcript.messages.find((m) => m.customType === "pi-web.ask.answers")?.details?.askId, opened.ask.askId);
 	assert.deepEqual((await host.call<Status>("status")).pendingAsks, undefined);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+/** A 1×1 PNG. */
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("ask_user images: closeAsk with images delivers the answers text plus the images once, refuses a non-image, and the answers record keeps them", async () => {
+	const { store, cwd } = family("ask-images");
+	const host = new ChatHost(store, cwd);
+	assert.ok((await host.ready).capabilities?.includes("ask-images"), "the host reports answer images");
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const close = (operationId: string, images: unknown) =>
+		host.call<{ result: string; retried?: boolean }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId, outcome: answered(opened.ask.askId), content: "Answers: target staging", images });
+	await assert.rejects(close("op-bad", [{ data: PNG, mimeType: "image/svg+xml" }]), /images must be image blocks of image\/jpeg, image\/png, image\/gif or image\/webp/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png" }]), /images must be image blocks/);
+	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.length, 1, "a refused close leaves the set open");
+	const image = { type: "image", data: PNG, mimeType: "image/png" };
+	assert.equal((await close("op-i1", [image])).result, "closed");
+	const retried = await close("op-i1", [image]);
+	assert.deepEqual([retried.result, retried.retried], ["closed", true], "a retry returns the outcome");
+	await idle(host, 2);
+	const deliveries = logged(store).filter((l) => l.label.startsWith("Answers: target staging"));
+	assert.equal(deliveries.length, 1, "the answers reached the model exactly once");
+	assert.equal(deliveries[0]?.images, 1, "with their image");
+	const record = (await host.call<Transcript>("transcript")).messages.find((m) => (m as { customType?: string }).customType === "pi-web.ask.answers");
+	assert.deepEqual(record?.content, [{ type: "text", text: "Answers: target staging" }, image], "the answers record keeps the text and the image");
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });

@@ -593,7 +593,7 @@ function unansweredOutcome(ask: PendingAsk, reason: string, closedAt: string): O
  * Delivers one closed set's answers to the model, once, as a follow-up keyed by the ask. `askId` is the key of its
  * `closed` record: the ask ID, or `<askId>@<revision>` for a partial send (one ask may send several before it closes).
  */
-export const AnswerDelivery = defineTask<{ askId: string; content: string }, { phase: "deliver" }, null>({
+export const AnswerDelivery = defineTask<{ askId: string; content: AnswerContent }, { phase: "deliver" }, null>({
 	name: "workbench.answer-delivery",
 	version: 1,
 	initial: () => ({ phase: "deliver" }),
@@ -623,6 +623,10 @@ export const AnswerDelivery = defineTask<{ askId: string; content: string }, { p
 	abort: (_task, runtime, c) => runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), c),
 });
 
+/** The follow-up's content: the answers text alone, or (with answer images) a text block then the images, as `UserInput`. */
+type AnswerContent = string | ({ type: "text"; text: string } | ImageBlock)[];
+type ImageBlock = { type: "image"; data: string; mimeType: string };
+
 export type CloseAsk = {
 	readonly askId: string;
 	/** The revision the user answered; a cancel names none. */
@@ -631,6 +635,8 @@ export type CloseAsk = {
 	/** PI WEB's validated outcome and the model-facing text it rendered from it (with its open-asks reminder). */
 	readonly outcome: Closed["outcome"];
 	readonly content: string;
+	/** Images the user attached to the answers, delivered after the text. */
+	readonly images?: readonly ImageBlock[];
 };
 
 /**
@@ -679,7 +685,7 @@ export async function closeAsk(conversation: Conversation, request: CloseAsk, re
 		else doc.open[request.askId] = ask;
 		const record = whole === undefined ? undefined : wholeRecord(request.outcome, whole.earlier, whole.order, open.contextEdited === true);
 		doc.closed[key] = { outcome: request.outcome, ...(record === undefined ? {} : { record }), operationId: request.operationId, delivered: false };
-		await tx.createTask(AnswerDelivery, { askId: key, content: request.content }, { ownership: { kind: "conversation" }, background: true });
+		await tx.createTask(AnswerDelivery, { askId: key, content: request.images === undefined || request.images.length === 0 ? request.content : [{ type: "text" as const, text: request.content }, ...request.images.map((i) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType }))] }, { ownership: { kind: "conversation" }, background: true });
 		return { result: "closed" as const, outcome: request.outcome, retried: false, ...(ask === undefined ? whole : { ask: JSON.parse(JSON.stringify(ask)) as PendingAsk }) };
 	}, context);
 }

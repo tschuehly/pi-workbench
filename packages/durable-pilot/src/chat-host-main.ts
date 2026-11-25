@@ -171,6 +171,16 @@ const text = (params: Record<string, unknown>, name: string): string => {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The image types PI WEB attaches (its `parsePromptAttachments`), which every model provider accepts. */
+const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/** A prompt's or answer's `images` as image blocks, or undefined when absent; anything else is refused. */
+function imageBlocks(images: unknown): { type: "image"; data: string; mimeType: string }[] | undefined {
+	if (images === undefined) return undefined;
+	if (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && IMAGE_TYPES.includes(i?.mimeType))) throw new Error("images must be image blocks of image/jpeg, image/png, image/gif or image/webp");
+	return images.map((i: { data: string; mimeType: string }) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+}
+
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	transcript: () => session.transcript(),
 	status: () => session.status(),
@@ -179,11 +189,11 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 		const { operationId, text: body, mode } = params;
 		if (typeof operationId !== "string" || operationId === "" || typeof body !== "string") throw new Error("prompt needs operationId and text");
 		if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
-		const { images, attachments } = params;
-		if (images !== undefined && (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && typeof i?.mimeType === "string"))) throw new Error("images must be image blocks");
+		const { attachments } = params;
+		const images = imageBlocks(params.images);
 		return session.prompt({
 			operationId, text: body, ...(mode === undefined ? {} : { mode }),
-			...(images === undefined ? {} : { images: images.map((i: { data: string; mimeType: string }) => ({ type: "image" as const, data: i.data, mimeType: i.mimeType })) }),
+			...(images === undefined ? {} : { images }),
 			...(Array.isArray(attachments) ? { attachments: attachments as Attachment[] } : {}),
 		});
 	},
@@ -191,11 +201,13 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	closeAsk: (params) => {
 		const outcome = params.outcome as CloseAsk["outcome"] | undefined;
 		if (outcome === undefined || typeof outcome !== "object" || typeof params.content !== "string") throw new Error("closeAsk needs outcome and content");
+		const images = imageBlocks(params.images);
 		return session.closeAsk({
 			askId: text(params, "askId"),
 			operationId: text(params, "operationId"),
 			outcome,
 			content: params.content,
+			...(images === undefined || images.length === 0 ? {} : { images }),
 			...(typeof params.revision === "string" ? { revision: params.revision } : {}),
 		});
 	},

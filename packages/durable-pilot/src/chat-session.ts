@@ -102,7 +102,7 @@ export const PROTOCOL = 2;
  * implements it. Protocol 2 hosts without the list support none of them. compact: `/compact` (method `compact`);
  * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries).
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "ask-images"] as const;
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -217,7 +217,7 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 	if (entry.kind === BASH_ENTRY) return [bashMessage(entry)];
 	const message = entry.model?.[0] as Message | undefined;
 	const entryId = String(entry.id);
-	const custom = (customType: string, content: string, details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
+	const custom = (customType: string, content: string | Record<string, unknown>[], details: unknown, id = entryId) => ({ role: "custom", customType, content, display: true, details, timestamp: message?.timestamp ?? 0, entryId: id });
 	if (entry.kind === CHECKPOINT_ENTRY) {
 		// The legacy extension's `context-checkpoint` message, after the Working Mode block it carried.
 		const { workingMode, text, ...details } = (entry.data ?? {}) as CheckpointData & { workingMode?: WorkingModeDetailsLike };
@@ -243,7 +243,12 @@ export function browserMessages(entry: EntryRecord, streamId?: string): Record<s
 		return [{ role: "system", source: "compaction", content: `Compacted history:\n\n${summary}`, timestamp: message.timestamp, entryId }];
 	}
 	if (userParts !== parts) return [{ ...message, content: userParts, entryId }];
-	if (entry.kind === ANSWERS_ENTRY) return [custom(ASK_ANSWERS_CUSTOM_TYPE, textOfContent(message.content), entry.data ?? null)];
+	if (entry.kind === ANSWERS_ENTRY) {
+		// Answers with images keep them after the text, so PI WEB's record can show them; without, the text alone as before.
+		const images = parts.filter((part) => part.type === "image") as unknown as Record<string, unknown>[];
+		const text = images.length === 0 ? textOfContent(message.content) : textOfContent(parts.filter((part) => part.type === "text"));
+		return [custom(ASK_ANSWERS_CUSTOM_TYPE, images.length === 0 ? text : [{ type: "text", text }, ...images], entry.data ?? null)];
+	}
 	if (entry.kind === RECONCILE_ENTRY) return [custom(RECONCILE_ENTRY, textOfContent(message.content), entry.data ?? null)];
 	if (entry.kind === AFK_CLOSE_ENTRY) return [custom(AFK_CLOSE_TYPE, textOfContent(message.content), null)];
 	// Delegation: the coalesced completion wake and a requested child update, as the legacy extension's custom messages.
