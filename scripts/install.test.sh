@@ -25,6 +25,9 @@ I=$t/projects/pi-workbench/scripts/install
 # Stub promote-installed: records its arguments and environment, links the builds, writes the job log (RESULT picks the outcome).
 cat >"$t/promote" <<'EOF'
 #!/usr/bin/env bash
+if [[ $1 == current ]]; then
+  for p in pi-workbench pi-web; do t=$(readlink "$PI_WORKBENCH_PROJECTS/$p.durable-installed") && printf '%s ' "${t##*-}" || printf 'none '; done; echo; exit 0
+fi
 echo "promote $* env=${PI_PROMOTE_DURABLE_ENV:-}" >>"$HOME/calls"
 [[ $1 == --force ]] && shift
 s=$HOME/.pi-workbench/installed-durable; mkdir -p "$s/jobs/j"
@@ -49,7 +52,7 @@ wb_rev=$(git -C "$t/wb.git" rev-parse main) pw_rev=$(git -C "$t/pw.git" rev-pars
 code=$(PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=/x" rc "$I")
 check "fresh install: exit 0" test "$code" = 0
 check "fresh install: PI WEB cloned on branch pi-workbench" test "$(git -C "$t/projects/pi-web" branch --show-current)" = pi-workbench
-check "fresh install: switch to both tips, environment passed through" grep -qx "promote switch $wb_rev $pw_rev 0 env=GIT_CONFIG_GLOBAL=/x" "$HOME/calls"
+check "fresh install: switch to both tips, environment passed through" grep -qx "promote switch $wb_rev $pw_rev --from none none 0 env=GIT_CONFIG_GLOBAL=/x" "$HOME/calls"
 check "fresh install: app built --app-only against :8506 from the installed PI WEB" \
   grep -qx "app --app-only dir=$t/projects/pi-web.durable-installed url=http://127.0.0.1:8506" "$HOME/calls"
 
@@ -63,7 +66,7 @@ check "dry run at the same tips: plans no switch" bash -c "test $code = 0 && gre
 echo two >>"$t/seed-pw/f"; git -C "$t/seed-pw" commit -qam two; git -C "$t/seed-pw" push -q origin HEAD:refs/heads/pi-workbench
 new_pw=$(git -C "$t/pw.git" rev-parse pi-workbench)
 code=$(RESULT="rollback done" rc "$I" --no-app --force)
-check "new PI WEB tip with a failed job: exit 1, --force passed on" bash -c "test $code = 1 && grep -qx 'promote --force switch $wb_rev $new_pw 0 env=' '$HOME/calls'"
+check "new PI WEB tip with a failed job: exit 1, --force passed on" bash -c "test $code = 1 && grep -qx 'promote --force switch $wb_rev $new_pw --from ${wb_rev:0:12} ${pw_rev:0:12} 0 env=' '$HOME/calls'"
 check "failed job: the checkouts stayed where they were" test "$(git -C "$t/projects/pi-web" rev-parse HEAD)" = "$pw_rev"
 
 mkdir -p "$t/other/scripts"; cp "$src" "$t/other/scripts/install"

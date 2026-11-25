@@ -2,7 +2,8 @@
 # Install (or update) Pi Workbench and PI WEB on this Mac from the tips of their integration branches, as the Durable
 # instance (docs/contracts/harness.md, "Installed and Development Checkouts"). Run it from the pi-workbench checkout:
 #   1. clone PI WEB beside it if missing (branch pi-workbench of $PI_WEB_REPO), then fetch both repos (no checkout moves);
-#   2. scripts/promote-installed switch <pi-workbench origin/main> <pi-web origin/pi-workbench> and wait for its job;
+#   2. scripts/promote-installed switch <pi-workbench origin/main> <pi-web origin/pi-workbench> --from <the installed pair>
+#      and wait for its job;
 #      skipped when both *.durable-installed links already point at those builds, so a rerun interrupts no session;
 #   3. build the native app (apps/pi-web-macos, --app-only: no services) for the Durable instance on :8506.
 # PI_PROMOTE_DURABLE_ENV passes through to the services, e.g. "GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
@@ -45,12 +46,14 @@ else pw_rev="origin/pi-workbench (after the clone)"; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
 current() { [[ $(readlink "$projects/$1.durable-installed" 2>/dev/null) == "$store/$1-${2:0:12}" ]]; }
+# Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
+read -r from_wb from_pw < <("$promote" current) || { echo "install: cannot read the installed pair" >&2; exit 1; }
 if current pi-workbench "$wb_rev" && current pi-web "$pw_rev"; then
   say "already installed: both *.durable-installed links point at these builds; no switch"
 elif [[ $dry == 1 ]]; then
-  run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" 0
+  run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0
 else
-  out=$("$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" 0) || { printf '%s\n' "$out" >&2; exit 1; }
+  out=$("$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0) || { printf '%s\n' "$out" >&2; exit 1; }
   printf '%s\n' "$out"
   log=$(sed -n 's/.*; log: //p' <<<"$out" | tail -1)
   [[ -n $log ]] || { echo "install: promote-installed printed no job log" >&2; exit 1; }

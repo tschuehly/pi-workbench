@@ -27,7 +27,8 @@ function harness() {
     # NO_LAUNCHD: a PI WEB build from before Phase C1; PROTOCOL: the Durable host protocol its daemon speaks.
     if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
-  shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
+  // print: a scheduled switch job runs while $HOME/job-running exists.
+  shim("launchctl", `if [ "$1" = print ]; then [ -e "$HOME/job-running" ] && echo "state = running"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
   shim("sleep", "exit 0");
   // Job folders are named by the second; give each switch its own.
@@ -47,6 +48,8 @@ function harness() {
     PI_PROMOTE_PS: `cat ${ps}`, PI_PROMOTE_ETIME_PS: `cat ${ps}`, PI_PROMOTE_ZSH: "/bin/zsh",
   };
   const run = (args, extra = {}) => spawnSync("bash", [script, ...args], { env: { ...env, ...extra }, encoding: "utf8" });
+  /** Schedule a switch from the pair installed now, as a Chat proposes it. */
+  const sw = (wb, pw, extra = {}, delay = ["0"]) => run(["switch", wb, pw, "--from", ...run(["current"], extra).stdout.trim().split(" "), ...delay], extra);
   // Each path: file bytes and mtime, link target, or folder.
   const snapshot = (paths) => {
     const out = {};
@@ -65,13 +68,13 @@ function harness() {
   const plist = (s) => JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(la, `com.pi-web-durable.${s}.plist`)], { encoding: "utf8" }).stdout);
   /** Schedule a durable switch, then run its job as launchd would. */
   const switchDurable = (wb, pw, extra = {}) => {
-    const scheduled = run(["switch", wb, pw, "0"], extra);
+    const scheduled = sw(wb, pw, extra);
     assert.equal(scheduled.status, 0, scheduled.stderr);
     const jobs = join(store, "jobs"), latest = readdirSync(jobs).sort().at(-1);
     const job = spawnSync("bash", [join(jobs, latest, "job.sh")], { env: { ...env, ...extra }, encoding: "utf8" });
     return { scheduled, status: job.status, log: readFileSync(join(jobs, latest, "job.log"), "utf8") };
   };
-  return { root, home, projects, la, store, data, env, run, durable, snapshot, log, plist, switchDurable };
+  return { root, home, projects, la, store, data, env, run, sw, bin, durable, snapshot, log, plist, switchDurable };
 }
 
 /**
@@ -169,6 +172,56 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
   assert.doesNotMatch(h.log("launchctl.log"), legacyLabels);
 });
 
+test("switch needs the live pair (--from), refuses a stale one, and one promotion at a time holds the lock", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const jobs = () => readdirSync(join(h.store, "jobs")).length, lock = join(h.store, "promote.lock");
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+  const missing = h.run(["switch", wbRev(2), pwRev(2)]);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /--from <live-workbench-rev> <live-pi-web-rev>[\s\S]*installed now: aaaaaaaaaaa1 bbbbbbbbbbb1/);
+
+  // A pair read before another Chat switched: refused, nothing changed, the lock released.
+  const before = instanceState(h);
+  for (const from of [["none", "none"], [short(wbRev(1)), short(pwRev(2))], ["main", short(pwRev(1))]]) {
+    const stale = h.run(["switch", wbRev(2), pwRev(2), "--from", ...from, "0"]);
+    assert.equal(stale.status, 8, stale.stderr);
+    assert.match(stale.stderr, /installed now is aaaaaaaaaaa1 bbbbbbbbbbb1[\s\S]*fresh approval/);
+  }
+  assert.equal(h.run(["switch", wbRev(2), pwRev(2), "--from", wbRev(1).slice(0, 7), pwRev(1), "0"]).status, 0, "a prefix or full revision matches");
+  assert.equal(jobs(), 2);
+  assert.deepEqual(instanceState(h), before);
+
+  // The scheduled job holds the lock while it runs: every other promotion fails fast.
+  writeFileSync(join(h.home, "job-running"), "");
+  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3)], ["switch-web", pwRev(3)]]) {
+    const busy = h.run(args);
+    assert.equal(busy.status, 6, `${args[0]}: ${busy.stderr}`);
+    assert.match(busy.stderr, /another promotion is in progress \(job com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
+  }
+  assert.equal(jobs(), 2);
+  // Its end releases the lock.
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.ok(!existsSync(lock));
+
+  // A live holder blocks; a dead one is taken over.
+  put(join(lock, "owner"), `pid ${process.pid}\n`);
+  assert.equal(h.run(["switch-workbench", wbRev(3)]).status, 6);
+  put(join(lock, "owner"), `pid ${deadPid()}\n`);
+  const takeover = h.run(["switch-workbench", wbRev(3)]);
+  assert.equal(takeover.status, 0, takeover.stderr);
+  assert.match(takeover.stderr, /taking over a stale promotion lock/);
+  assert.ok(!existsSync(lock));
+});
+
+test("switch waits 10 seconds by default", () => {
+  const h = harness();
+  assert.equal(h.sw(wbRev(1), pwRev(1), {}, []).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  assert.match(readFileSync(join(job, "job.sh"), "utf8"), /\nsleep 10\n/);
+});
+
 test("prune keeps its live and rollback builds", () => {
   const h = harness();
   const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
@@ -212,7 +265,7 @@ test("a Durable switch refuses a PI WEB build whose daemon would not run hosts a
   const h = harness();
   assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
   const before = instanceState(h), launches = h.log("launchctl.log");
-  const refused = h.run(["switch", wbRev(2), pwRev(2), "0"], { NO_LAUNCHD: "1" });
+  const refused = h.sw(wbRev(2), pwRev(2), { NO_LAUNCHD: "1" });
   assert.equal(refused.status, 7, refused.stderr);
   assert.match(refused.stderr, /PI_WEB_DURABLE_HOST_LAUNCHD/);
   assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
@@ -230,14 +283,14 @@ test("a Durable switch refuses while a running host speaks a protocol the new da
   const before = instanceState(h), launches = h.log("launchctl.log");
 
   // A protocol 3 daemon reattaches none of them; a host that no longer runs does not count.
-  const bumped = h.run(["switch", wbRev(2), pwRev(2), "0"], { PROTOCOL: "3" });
+  const bumped = h.sw(wbRev(2), pwRev(2), { PROTOCOL: "3" });
   assert.equal(bumped.status, 7, bumped.stderr);
   assert.match(bumped.stderr, /refusing: .*protocol 3/);
   assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-current: protocol 2, revision /);
   assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-old: protocol 1, revision .*pi-workbench-ffffffffffff/);
   assert.doesNotMatch(bumped.stderr, /fam-gone/);
   // A protocol 2 daemon still cannot reattach the protocol 1 family.
-  const same = h.run(["switch", wbRev(3), pwRev(3), "0"]);
+  const same = h.sw(wbRev(3), pwRev(3));
   assert.equal(same.status, 7, same.stderr);
   assert.match(same.stderr, /fam-old/);
   assert.doesNotMatch(same.stderr, /fam-current|fam-gone/);
@@ -247,7 +300,7 @@ test("a Durable switch refuses while a running host speaks a protocol the new da
 
   // Without the old family it schedules; a host started during the delay is checked again when the job starts.
   hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }]);
-  const scheduled = h.run(["switch", wbRev(3), pwRev(3), "0"]);
+  const scheduled = h.sw(wbRev(3), pwRev(3));
   assert.equal(scheduled.status, 0, scheduled.stderr);
   hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }, { id: "fam-late", revision: old, protocol: 1, pid: process.pid }]);
   const late = instanceState(h);
@@ -376,7 +429,7 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
   const plist = (s) => JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(la, `com.pi-workbench.durable-trial.${s}.plist`)], { encoding: "utf8" }).stdout);
   // Like switchDurable, against the trial's store.
   const promote = (n, extra = {}) => {
-    const scheduled = h.run(["switch", wbRev(n), pwRev(n), "0"], { ...t, ...extra });
+    const scheduled = h.sw(wbRev(n), pwRev(n), { ...t, ...extra });
     assert.equal(scheduled.status, 0, scheduled.stderr);
     const job = join(store, "jobs", readdirSync(join(store, "jobs")).sort().at(-1));
     // launchd starts the job without the caller's environment: only the shims' switches.
