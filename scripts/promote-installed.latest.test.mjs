@@ -118,6 +118,30 @@ test("latest falls back to local main when the fetch fails, and to origin/pi-wor
   assert.deepEqual(out.merges.map((m) => m.subject), ["pi-web three", "pi-web two"]);
 });
 
+test("failed fetch cannot roll back a newer installed Workbench or PI WEB without explicit approval", () => {
+  const h = harness(), wb = h.repos["pi-workbench"], pw = h.repos["pi-web"];
+  const { wbPin, pw2 } = moveOn(h);
+  for (const name of ["pi-workbench", "pi-web"]) {
+    h.git(join(h.projects, name), "fetch", "origin");
+    h.git(join(h.projects, name), "remote", "set-url", "origin", join(h.root, "missing.git"));
+  }
+  h.build("pi-web", pw.first, true);
+  h.build("pi-workbench", wbPin, true);
+  h.build("pi-workbench", wb.first);
+  const stale = h.run("latest", "--from", wbPin, pw.first);
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, /refusing: pi-workbench .*--allow-downgrade/);
+  h.build("pi-web", pw2, true);
+  h.git(join(h.projects, "pi-web"), "update-ref", "refs/remotes/origin/pi-workbench", pw.first);
+  h.build("pi-workbench", wb.first, true);
+  const staleWeb = h.run("latest", "--from", wb.first, pw2);
+  assert.notEqual(staleWeb.status, 0);
+  assert.match(staleWeb.stderr, /refusing: pi-web .*--allow-downgrade/);
+  assert.ok(!existsSync(join(h.store, "jobs")));
+  const rollback = h.run("--allow-downgrade", "latest", "--from", wb.first, pw2);
+  assert.equal(rollback.status, 0, rollback.stderr);
+});
+
 test("latest --from switches to the latest pair with switch's lock and stale check", () => {
   const h = harness();
   const wb1 = h.repos["pi-workbench"].first, pw1 = h.repos["pi-web"].first;
@@ -148,8 +172,8 @@ test("latest --from switches to the latest pair with switch's lock and stale che
 
   // Up to date: nothing to switch, no job.
   rmSync(join(h.store, "promote.lock"), { recursive: true, force: true });
-  h.build("pi-workbench", wbPin, true);
-  h.build("pi-web", pw2, true);
+  rmSync(join(h.store, "current"));
+  symlinkSync(`releases/${wbPin.slice(0, 12)}-${pw2.slice(0, 12)}`, join(h.store, "current"));
   const same = h.run("latest", "--from", wbPin.slice(0, 12), pw2.slice(0, 12));
   assert.equal(same.status, 0, same.stderr);
   assert.match(same.stdout, /up to date/);
