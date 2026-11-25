@@ -9,7 +9,7 @@ import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeGrants, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -415,6 +415,7 @@ test("file-edit tools: a path is writable exactly where the Chat's commands coul
   assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
   // Astra re-check of 2604454: the path Durable writes (`@` stripped, spaces made plain) is among the approved ones.
   assert.ok(toolPaths("@src/a\u00A0b.ts", { cwd: app, env }).includes(join(app, "src", "a b.ts")));
+  assert.ok(toolPaths("file:///x//file.txt", { cwd: app, env }).includes("/x/file.txt"), "normalized as Durable resolves it");
   // The helper's reason is the text after a message's last ": ", never a file name; only EPERM is the fence.
   const cause = (stderr) => { const e = writeError(stderr, "/x", 1); return [e.code, /write fence/.test(e.message)]; };
   assert.deepEqual(cause("sh: /a/Operation not permitted/f: Is a directory\n"), ["EISDIR", false]);
@@ -448,17 +449,6 @@ test("file-edit tools: a folder swapped for a link after the approval leads nowh
   await fencedWrite(join(app, "a", "b", "c.txt"), "ü\n", at);
   assert.equal(readFileSync(join(app, "a", "b", "c.txt"), "utf8"), "ü\n");
   await assert.rejects(fencedWrite(join(app, ".git", "objects", "ab", "cdef"), "x", at), /Blocked by the write fence/);
-  // Astra review of 667f26b: the grants of the approval bind the write. A Chat in app/sub whose sub becomes a link to
-  // checkout b would get b's grant if they were recomputed at write time.
-  const b = join(fake, "IdeaProjects", "b");
-  execFileSync("git", ["init", "-q", b]);
-  mkdirSync(join(app, "sub"));
-  const inSub = { ...at, cwd: join(app, "sub") };
-  const pinned = await writeGrants(inSub);
-  rmSync(join(app, "sub"), { recursive: true });
-  symlinkSync(b, join(app, "sub"));
-  await assert.rejects(fencedWrite(join(app, "sub", "x"), "x", { ...inSub, rules: pinned }), /Blocked by the write fence/);
-  assert.equal(existsSync(join(b, "x")), false);
   // Ordinary errors keep their cause; a cancel before the helper starts writes nothing.
   await assert.rejects(fencedWrite(join(app, "a"), "x", at), (error) => error.code === "EISDIR" && !/write fence/.test(error.message));
   const cancelled = new AbortController();

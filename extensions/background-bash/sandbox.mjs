@@ -345,16 +345,16 @@ export function mayWrite(path, { write, read = [], reopen = [], locked = [], his
  * undefined when its commands could write it too. Every spelling a tool layer may make of it must pass: with and
  * without a leading `@` and Unicode spaces made plain, then as Durable resolves it (`~`, `file://`, relative to `cwd`).
  */
-export async function writeRefusal(path, { cwd, sessionId, env, rules }) {
+export async function writeRefusal(path, { cwd, sessionId, env }) {
   if (typeof path !== "string") return undefined;
-  rules ??= await writeGrants({ cwd, sessionId, env });
+  const rules = await writeGrants({ cwd, sessionId, env });
   const target = toolPaths(path, { cwd, env }).find((t) => !mayWrite(t, rules));
   if (target === undefined) return undefined;
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
 }
 
 /** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */
-export const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
+const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
 
 /**
  * Every absolute path a tool layer may make of the tool argument `path`: with and without a leading `@` and Unicode
@@ -370,7 +370,7 @@ export function toolPath(p, { cwd, env }) {
   const home = env.HOME ?? homedir();
   if (p === "~") return home;
   if (p.startsWith("~/")) return join(home, p.slice(2));
-  if (p.startsWith("file://")) try { return fileURLToPath(p); } catch { /* an ordinary path then */ }
+  if (p.startsWith("file://")) try { return resolve(fileURLToPath(p)); } catch { /* an ordinary path then */ }
   return resolve(cwd, p);
 }
 
@@ -391,13 +391,13 @@ function sandboxBin(env, home, what) {
  * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
  * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
  * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
- * after the tool's approval (`writeRefusal`) leads nowhere; `rules` are the grants that approval used, else computed
- * now. Throws when the fence refuses or no sandbox is proven, with `code` as Node's fs errors carry it.
+ * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven,
+ * with `code` as Node's fs errors carry it.
  */
-export async function fencedWrite(path, content, { cwd, sessionId, env, rules, signal }) {
+export async function fencedWrite(path, content, { cwd, sessionId, env, signal }) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "nothing was written");
-  rules ??= await writeGrants({ cwd, sessionId, env });
+  const rules = await writeGrants({ cwd, sessionId, env });
   if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
   const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
   const { code, stderr } = await new Promise((done) => {

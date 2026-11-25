@@ -627,13 +627,9 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 		// D13: the Chat's environment writes in the fence, so a folder swapped for a link after the approval leads nowhere.
 		mkdirSync(join(cwd, "sub"));
 		assert.equal(await bash.writeRefusal(join(cwd, "sub", "x.txt"), cwd, "lead" as never), undefined);
-		// Astra re-check of 2604454: one approval per call, under the path Durable writes (`@` stripped).
-		assert.equal(await bash.writeRefusal("@sub/x.txt", cwd, "lead" as never), undefined);
-		assert.ok(bash.takeApproval("lead" as never, join(cwd, "sub", "x.txt")), "each approval waits for its own write");
 		rmSync(join(cwd, "sub"), { recursive: true });
 		symlinkSync(away, join(cwd, "sub"));
 		const raced = await bash.env({ cwd, shellEnv: {} }, "lead" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
-		assert.equal(bash.takeApproval("lead" as never, join(cwd, "sub", "x.txt")), undefined, "the write took the first");
 		assert.equal(raced.ok ? "written" : raced.error.code, "permission_denied");
 		assert.deepEqual(readdirSync(away), []);
 		await bash.fullAccess("on", "test", async () => true);
@@ -654,6 +650,7 @@ test("codemode's temp folders write unfenced only outside home, by real path: a 
 	mkdirSync(join(home, "..cache"), { recursive: true });
 	symlinkSync(join(home, "..cache"), join(ROOT, "alias-in-home"));
 	assert.equal(outsideHome(join(home, "..cache"), home), false);
+	assert.equal(outsideHome(join(home, "..cache").toUpperCase(), home), false, "in any case spelling APFS accepts");
 	assert.equal(outsideHome(join(ROOT, "alias-in-home"), home), false, "an alias resolves into home");
 	assert.equal(outsideHome(home, home), false);
 	assert.equal(outsideHome(join(ROOT, "jobs-elsewhere-missing"), home), false, "a folder that does not exist is never exempt");
