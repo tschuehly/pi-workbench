@@ -3,7 +3,7 @@
 // environment, never from files the command can write. No usable sandbox means the command does not start.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { fileURLToPath } from "node:url";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -291,11 +291,11 @@ function privateDir(dir) {
  * ~/.pi-workbench/sandbox, so only a fenced process gets EPERM writing there.
  */
 export function alreadyFenced() {
-  const probe = join(userInfo().homedir, ".pi-workbench", "sandbox", `probe-${process.pid}`);
+  const state = join(userInfo().homedir, ".pi-workbench", "sandbox");
   try {
-    mkdirSync(join(probe, ".."), { recursive: true, mode: 0o700 });
-    writeFileSync(probe, "");
-    unlinkSync(probe);
+    mkdirSync(state, { recursive: true, mode: 0o700 });
+    // A fresh folder of its own: never truncates or removes an entry someone planted under a predictable name.
+    rmdirSync(mkdtempSync(join(state, "probe-")));
     return false;
   } catch (error) { return error.code === "EPERM"; }
 }
@@ -345,20 +345,25 @@ export function mayWrite(path, { write, read = [], reopen = [], locked = [], his
  * undefined when its commands could write it too. Every spelling a tool layer may make of it must pass: with and
  * without a leading `@` and Unicode spaces made plain, then as Durable resolves it (`~`, `file://`, relative to `cwd`).
  */
-export async function writeRefusal(path, { cwd, sessionId, env }) {
+export async function writeRefusal(path, { cwd, sessionId, env, rules }) {
   if (typeof path !== "string") return undefined;
-  const home = env.HOME ?? homedir();
-  const toolPath = (p) => {
-    if (p === "~") return home;
-    if (p.startsWith("~/")) return join(home, p.slice(2));
-    if (p.startsWith("file://")) try { return fileURLToPath(p); } catch { /* an ordinary path then */ }
-    return resolve(cwd, p);
-  };
   const spellings = [path, path.replace(/^@/, "")].flatMap((p) => [p, p.replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ")]);
-  const rules = (await jobGrants({ cwd, sessionId }, env)).rules;
-  const target = [...new Set(spellings.map(toolPath))].find((t) => !mayWrite(t, rules));
+  rules ??= await writeGrants({ cwd, sessionId, env });
+  const target = [...new Set(spellings.map((p) => toolPath(p, { cwd, env })))].find((t) => !mayWrite(t, rules));
   if (target === undefined) return undefined;
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
+}
+
+/** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */
+export const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
+
+/** `p` as Durable's file tools resolve it (env/node.js resolvePath): `~`, `file://`, relative to `cwd`. */
+export function toolPath(p, { cwd, env }) {
+  const home = env.HOME ?? homedir();
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  if (p.startsWith("file://")) try { return fileURLToPath(p); } catch { /* an ordinary path then */ }
+  return resolve(cwd, p);
 }
 
 // Fixed: the paths are its arguments, never script text. Makes the parent folders, then writes stdin to the file.
@@ -378,16 +383,18 @@ function sandboxBin(env, home, what) {
  * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
  * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
  * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
- * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven.
+ * after the tool's approval (`writeRefusal`) leads nowhere; `rules` are the grants that approval used, else computed
+ * now. Throws when the fence refuses or no sandbox is proven, with `code` as Node's fs errors carry it.
  */
-export async function fencedWrite(path, content, { cwd, sessionId, env }) {
+export async function fencedWrite(path, content, { cwd, sessionId, env, rules, signal }) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "nothing was written");
-  const { rules } = await jobGrants({ cwd, sessionId }, env);
+  rules ??= await writeGrants({ cwd, sessionId, env });
+  if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
   const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
   const { code, stderr } = await new Promise((done) => {
     // A fixed environment: nothing of the tool's (BASH_ENV, ENV) reaches the shell.
-    const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"] });
+    const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"], ...(signal ? { signal } : {}) });
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("error", (error) => done({ code: -1, stderr: error.message }));
@@ -395,7 +402,12 @@ export async function fencedWrite(path, content, { cwd, sessionId, env }) {
     child.stdin.on("error", () => {});
     child.stdin.end(content);
   });
-  if (code !== 0) throw new Error(`Blocked by the write fence: ${path} could not be written (${stderr.trim() || `exit ${code}`})`);
+  if (code === 0) return;
+  if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
+  // The helper's own message names the cause; only a refusal by the fence is a fence block.
+  const cause = /Operation not permitted/.test(stderr) ? "EPERM" : /Is a directory/.test(stderr) ? "EISDIR" : /Not a directory/.test(stderr) ? "ENOTDIR" : /No such file/.test(stderr) ? "ENOENT" : "EIO";
+  const detail = stderr.trim() || `exit ${code}`;
+  throw Object.assign(new Error(cause === "EPERM" ? `Blocked by the write fence: ${path} could not be written (${detail})` : `${path} could not be written (${detail})`), { code: cause });
 }
 
 /**

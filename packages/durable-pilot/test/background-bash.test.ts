@@ -591,11 +591,22 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 	const { store, cwd } = family("write-fence");
 	// Outside every grant: this account's own sandbox state, which no fence ever grants (sandbox.mjs).
 	const outside = join(userInfo().homedir, ".pi-workbench", "sandbox", `write-fence-test-${String(process.pid)}`);
+	// Astra review of 667f26b: the Chat's own write tool goes through the sandboxed helper (chat.ts env factory), seen
+	// by a sandbox-exec that logs each call and then runs Apple's.
+	const calls = join(ROOT, "sandbox-calls.log");
+	const wrapper = join(ROOT, "sandbox-exec-logged");
+	writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec /usr/bin/sandbox-exec "$@"\n`, { mode: 0o755 });
+	process.env.PI_SANDBOX_EXEC = wrapper;
 	const host = new ChatHost(store, cwd);
-	await host.ready;
+	try {
+		await host.ready;
+	} finally {
+		delete process.env.PI_SANDBOX_EXEC;
+	}
 	await host.call("prompt", { operationId: "op-in", text: call("write", { path: "inside.txt", content: "in" }) });
 	const written = await toolEnd(host);
 	assert.equal(written.isError, false, String(written.text));
+	assert.match(readFileSync(calls, "utf8"), /mkdir -p .* \S*inside\.txt/, "written by the fenced helper");
 	await host.call("prompt", { operationId: "op-out", text: call("write", { path: outside, content: "out" }) });
 	const refused = await toolEnd(host, 2);
 	assert.equal(refused.isError, true);

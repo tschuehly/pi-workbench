@@ -11,19 +11,20 @@
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
-import { err, FileError, ok, type Result } from "@earendil-works/pi-durable/env";
+import { err, FileError, type FileErrorCode, ok, type Result } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
-import { alreadyFenced, fenced, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
+import { alreadyFenced, fenced, fencedWrite, toolPath, writeGrants, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { ChildDoc, DelegationDoc } from "./delegation.ts";
@@ -146,26 +147,32 @@ function confirmDialog(text: string): Promise<boolean> {
 type Hooks = { deliver: <T>(work: () => Promise<T>) => Promise<T>; changed: () => void };
 
 /**
- * Temp folders the Chat's environments made (codemode's output files), in OS temp, which no fenced command can write.
+ * Temp folders the Chat's environments made (codemode's output files) outside home, where no fence grants anything.
  * shortcut: in memory, so a codemode rerun after a host restart cannot write its recorded folder; record them if that matters.
  */
 const tempDirs = new Set<string>();
+
+/** fs error codes of the fenced helper as Durable's file errors; anything else (no sandbox) is a refusal. */
+const FILE_ERRORS: Record<string, FileErrorCode> = { ABORT_ERR: "aborted", EISDIR: "is_directory", ENOTDIR: "not_directory", ENOENT: "not_found", EIO: "unknown" };
+
+type Fence = (path: string, content: string | Uint8Array, signal: AbortSignal | undefined) => Promise<boolean>;
 
 /**
  * A conversation's execution environment whose file writes (write and edit tools, codemode's files) go through `fence`:
  * true when it wrote the file inside the write fence, false when this conversation runs unfenced (then written here).
  */
 class FencedEnv extends NodeExecutionEnv {
-	readonly #fence: (path: string, content: string | Uint8Array) => Promise<boolean>;
+	readonly #fence: Fence;
 
-	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: (path: string, content: string | Uint8Array) => Promise<boolean>) {
+	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: Fence) {
 		super(options);
 		this.#fence = fence;
 	}
 
 	override async createTempDir(prefix: string | undefined, c: Context): Promise<Result<string, FileError>> {
 		const made = await super.createTempDir(prefix, c);
-		if (made.ok) tempDirs.add(made.value);
+		// A TMPDIR inside home could lie in a grant, where a background job could swap the folder: fenced like any write.
+		if (made.ok && relative(realpathSync(process.env.HOME ?? homedir()), realpathSync(made.value)).startsWith("..")) tempDirs.add(made.value);
 		return made;
 	}
 
@@ -173,10 +180,11 @@ class FencedEnv extends NodeExecutionEnv {
 		const target = await this.absolutePath(path, c);
 		if (!target.ok || c.abortSignal?.aborted === true || tempDirs.has(dirname(target.value))) return super.writeFile(path, content, c);
 		try {
-			return (await this.#fence(target.value, content)) ? ok(undefined) : await super.writeFile(path, content, c);
+			return (await this.#fence(target.value, content, c.abortSignal)) ? ok(undefined) : await super.writeFile(path, content, c);
 		} catch (error) {
 			// Fail closed: a refused write, or no proven sandbox, writes nothing.
-			return err(new FileError("permission_denied", (error as Error).message, target.value));
+			const code = FILE_ERRORS[String((error as { code?: unknown }).code)] ?? "permission_denied";
+			return err(new FileError(code, (error as Error).message, target.value));
 		}
 	}
 }
@@ -439,17 +447,32 @@ export class BackgroundBash {
 	async writeRefusal(path: unknown, cwd: string, conversationId: ConversationId): Promise<string | undefined> {
 		if (this.#unfenced(conversationId)) return undefined;
 		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId: this.#options.rootId(), cwd }) };
-		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env })) as string | undefined;
+		const at = { cwd, sessionId: this.#options.chatId, env };
+		const rules = await writeGrants(at);
+		const refusal = (await fenceRefusal(path, { ...at, rules })) as string | undefined;
+		// The write runs under the grants this approval used, never ones recomputed after a background job changed a folder.
+		// shortcut: an approved call that never writes (an edit whose text does not match) leaves its entry; bounded below.
+		if (refusal === undefined && typeof path === "string") {
+			if (this.#approved.size > 1000) this.#approved.clear();
+			this.#approved.set(`${conversationId}\0${toolPath(path, at) as string}`, rules);
+		}
+		return refusal;
 	}
+
+	/** Grants of approved write and edit calls, by conversation and resolved path, taken by their write. */
+	readonly #approved = new Map<string, unknown>();
 
 	/**
 	 * `conversationId`'s execution environment: its file writes run in a sandboxed helper under the write fence of its
 	 * commands, so they bind to what `writeRefusal` approved (DECISIONS D13), checked at each write.
 	 */
 	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
-		return new FencedEnv(options, async (path, content) => {
+		return new FencedEnv(options, async (path, content, signal) => {
 			if (this.#unfenced(conversationId)) return false;
-			await fencedWrite(path, content, { cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv } });
+			const key = `${conversationId}\0${path}`;
+			const rules = this.#approved.get(key);
+			this.#approved.delete(key);
+			await fencedWrite(path, content, { cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, rules, signal });
 			return true;
 		});
 	}

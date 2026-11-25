@@ -9,7 +9,7 @@ import { after, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, workstreamId, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, workstreamId, writeGrants, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -440,6 +440,23 @@ test("file-edit tools: a folder swapped for a link after the approval leads nowh
   await fencedWrite(join(app, "a", "b", "c.txt"), "ü\n", at);
   assert.equal(readFileSync(join(app, "a", "b", "c.txt"), "utf8"), "ü\n");
   await assert.rejects(fencedWrite(join(app, ".git", "objects", "ab", "cdef"), "x", at), /Blocked by the write fence/);
+  // Astra review of 667f26b: the grants of the approval bind the write. A Chat in app/sub whose sub becomes a link to
+  // checkout b would get b's grant if they were recomputed at write time.
+  const b = join(fake, "IdeaProjects", "b");
+  execFileSync("git", ["init", "-q", b]);
+  mkdirSync(join(app, "sub"));
+  const inSub = { ...at, cwd: join(app, "sub") };
+  const pinned = await writeGrants(inSub);
+  rmSync(join(app, "sub"), { recursive: true });
+  symlinkSync(b, join(app, "sub"));
+  await assert.rejects(fencedWrite(join(app, "sub", "x"), "x", { ...inSub, rules: pinned }), /Blocked by the write fence/);
+  assert.equal(existsSync(join(b, "x")), false);
+  // Ordinary errors keep their cause; a cancel before the helper starts writes nothing.
+  await assert.rejects(fencedWrite(join(app, "a"), "x", at), (error) => error.code === "EISDIR" && !/write fence/.test(error.message));
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(fencedWrite(join(app, "late.txt"), "x", { ...at, signal: cancelled.signal }), { code: "ABORT_ERR" });
+  assert.equal(existsSync(join(app, "late.txt")), false);
   await assert.rejects(fencedWrite(join(app, "none.txt"), "x", { ...at, env: { ...env, PI_SANDBOX_EXEC: join(fake, "missing") } }), /Sandbox unavailable/);
   assert.equal(existsSync(join(app, "none.txt")), false);
 });
