@@ -411,19 +411,20 @@ preview() { # <json 0|1>: the installed and latest pair and what lies between (P
   local iwb ipw
   iwb=$(full pi-workbench "$2") ipw=$(full pi-web "$3")
   { merges pi-workbench "$iwb" "$LATEST_WB"; merges pi-web "$ipw" "$LATEST_PW"; } | node -e '
-    const [json, me, workbench, piWeb, lwb, lpw] = process.argv.slice(1); let d = "";
+    const [json, me, workbench, piWeb, lwb, lpw, unfinished] = process.argv.slice(1); let d = "";
     process.stdin.on("data", (c) => d += c).on("end", () => {
       const merges = d.split("\n").filter(Boolean).map((l) => { const [repo, sha, ...s] = l.split("\t"); return { repo, sha, subject: s.join("\t") }; });
-      const out = { installed: { workbench, piWeb }, latest: { workbench: lwb, piWeb: lpw }, merges, upToDate: workbench === lwb && piWeb === lpw };
+      const out = { installed: { workbench, piWeb }, latest: { workbench: lwb, piWeb: lpw }, merges, upToDate: !unfinished && workbench === lwb && piWeb === lpw };
       if (json === "1") return console.log(JSON.stringify(out));
       const s = (r) => r.slice(0, 12);
       console.log(`installed  pi-workbench ${s(workbench)}  pi-web ${s(piWeb)}`);
       console.log(`latest     pi-workbench ${s(lwb)}  pi-web ${s(lpw)}`);
       if (out.upToDate) return console.log("up to date");
-      console.log(`${merges.length} commits to install:`);
+      if (unfinished) console.log("Unfinished switch: resume the saved target.");
+      else console.log(`${merges.length} commits to install:`);
       for (const m of merges) console.log(`  ${m.repo.padEnd(12)} ${s(m.sha)} ${m.subject}`);
       console.log(`install with the owner'\''s go-ahead: ${me} latest --from ${s(workbench)} ${s(piWeb)} --to ${s(lwb)} ${s(lpw)}`);
-    })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW"
+    })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW" "$4"
 }
 
 case ${1:-} in prepare|switch|switch-workbench|switch-web|latest|current|prune|check-idle|check-hosts|sessiond-unchanged|--force|--allow-downgrade) ;;
@@ -523,13 +524,16 @@ if [[ ${1:-} == latest ]]; then
     esac; shift
   done
   [[ ${#to[@]} == 0 || ${#from[@]} == 2 ]] || { echo "latest --to needs --from; $usage" >&2; exit 2; }
-  if [[ $dry == 0 && ${#from[@]} == 2 ]] && journal=$(readlink "$STORE/in-progress"); then
-    read -r LATEST_WB LATEST_PW <"$journal/to" # retry the approved job, not a newer remote tip
+  journal=
+  if journal=$(readlink "$STORE/in-progress"); then
+    [[ $(journal_mode "$journal") == switch ]] || busy "unfinished switch-web; rerun it or install"
+    read -r twb tpw <"$journal/to" # show and replay the approved job, not a newer remote tip
+    LATEST_WB=$(full pi-workbench "$twb"); LATEST_PW=$(full pi-web "$tpw")
   else latest_pair || exit 1; fi
   if [[ $dry == 1 || ${#from[@]} == 0 ]]; then
     read -r iwb ipw < <(committed_pair)
     forward pi-workbench "$iwb" "$LATEST_WB" && forward pi-web "$ipw" "$LATEST_PW" || exit 1
-    preview "$json" "$iwb" "$ipw"; exit $?
+    preview "$json" "$iwb" "$ipw" "$journal"; exit $?
   fi
   if [[ ${#to[@]} == 2 ]] && ! { matches "$LATEST_WB" "${to[0]}" && matches "$LATEST_PW" "${to[1]}"; }; then
     echo "refusing: latest moved since you looked: now ${LATEST_WB:0:12} ${LATEST_PW:0:12} (workbench, pi-web), not the --to pair ${to[0]} ${to[1]}; review again. Nothing changed." >&2

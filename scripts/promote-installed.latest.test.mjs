@@ -102,6 +102,19 @@ test("latest --dry-run --json: installed and latest full revisions, first-parent
   assert.deepEqual(current.merges, []);
 });
 
+test("latest preview offers to finish an interrupted same-pair switch even if main moved", () => {
+  const h = harness(), wb = h.repos["pi-workbench"].first, pw = h.repos["pi-web"].first;
+  h.build("pi-workbench", wb, true); h.build("pi-web", pw, true); moveOn(h);
+  const job = join(h.store, "jobs/interrupted");
+  for (const key of ["from", "to"]) put(join(job, key), `${wb.slice(0, 12)} ${pw.slice(0, 12)}\n`);
+  symlinkSync(job, join(h.store, "in-progress"));
+  const r = h.run("latest", "--dry-run", "--json");
+  assert.equal(r.status, 0, r.stderr);
+  const preview = JSON.parse(r.stdout);
+  assert.deepEqual(preview.latest, { workbench: wb, piWeb: pw });
+  assert.equal(preview.upToDate, false);
+});
+
 test("latest falls back to local main when the fetch fails, and to origin/pi-workbench without a pi-web.rev", () => {
   const h = harness();
   const wb1 = h.repos["pi-workbench"].first;
