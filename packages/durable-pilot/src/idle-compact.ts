@@ -1,9 +1,11 @@
 // Idle prompt-cache compaction: shortly before the prompt cache of a viewed, idle Chat expires, compact it, so the
 // owner's next message pays for a short summary instead of rewriting a cold cache of the whole context.
-// Decision (2026-11): the timer's summary comes from the provider's cheapest model through a `beforeCompact` hook, not
-// Durable's own summarizer on the Chat's model (a cold read of the whole context: on Opus ~$0.42 at 100k tokens, ~$1.22
-// at 300k, which only pays off if the owner returns 55-70% of the time). Undo: drop `idleCompaction().extension` from
-// the Chat's extensions in chat.ts, and the timer compactions summarize on the Chat's model again.
+// Decision (2026-11): the timer's summary comes from a cheaper model of the Chat's provider (Sonnet on Anthropic, Terra on
+// Codex) through a `beforeCompact` hook, not Durable's own summarizer on the Chat's model (a cold read of the whole
+// context: on Opus ~$0.42 at 100k tokens, ~$1.22 at 300k; on Sonnet ~$0.27 and ~$0.67). Haiku scored worst in the
+// owner's summary backtest, so the provider's cheapest model is not used. Undo: drop `idleCompaction().extension` from
+// the Chat's extensions in chat.ts, and the timer compactions summarize on the Chat's model again; or change the model
+// in IDLE_SUMMARY_MODELS.
 
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -39,10 +41,10 @@ export const IDLE_INSTRUCTIONS: string = compactionInstructions({
 	nextPhase: "Continue with the owner's next message.",
 });
 
-/** The cheapest model of each provider, which writes a timer compaction's summary. */
-export const IDLE_SUMMARY_MODELS: Readonly<Record<string, string>> = { anthropic: "claude-haiku-5-5", "openai-codex": "gpt-6-luna" };
-// Room for a ~5k-token summary and a little reasoning; a summary that hits it is truncated and declined.
-const SUMMARY_MAX_TOKENS = 8_000;
+/** The model of each provider that writes a timer compaction's summary (same provider only). */
+export const IDLE_SUMMARY_MODELS: Readonly<Record<string, string>> = { anthropic: "claude-sonnet-5-5", "openai-codex": "gpt-6.1-terra" };
+// Sonnet hit 8k in 2 of 8 backtest samples; a summary that hits this cap is truncated and declined.
+const SUMMARY_MAX_TOKENS = 16_000;
 const SUMMARY_TIMEOUT_MS = 180_000;
 const SUMMARY_SYSTEM = "You are a context summarization assistant. Read the conversation between a user and an AI assistant and write the summary the instructions ask for. Do NOT continue the conversation or answer its questions; output only the summary.";
 
@@ -146,7 +148,13 @@ export function idleCompaction() {
 			hook(CompactionTask, {
 				beforeCompact: async (compaction, api, c) => {
 					if (compaction.instructions !== IDLE_INSTRUCTIONS) return undefined;
-					const decline = (warning?: string) => (warning === undefined ? undefined : gate.warn(warning), { decline: true as const });
+					// A warning that throws must not escape: a throw makes Durable summarize cold on the Chat's model.
+					const decline = (warning?: string) => {
+						try {
+							if (warning !== undefined) gate.warn(warning);
+						} catch {}
+						return { decline: true as const };
+					};
 					try {
 						const intent = (await api.snapshot(IdleCacheDoc, api.conversationId, c))?.intent;
 						if (intent == null || intent.task !== Number(api.taskId)) return decline();

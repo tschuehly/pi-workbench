@@ -60,7 +60,8 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
  * - `fail` → a non-retryable provider error;
  * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
  *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error (as is a summarized
- *   conversation containing `summary-fail`; one containing `summary-gate:<file>` waits until that file exists);
+ *   conversation containing `summary-fail`; one containing `summary-length` is cut off at its output cap (`length`);
+ *   one containing `summary-gate:<file>` waits until that file exists); the log line carries its `maxTokens`;
  * - a tool result → `done`, unless `repropose` and the result says the tool was interrupted: then call it again;
  * - a child's assignment (profile text, then `Assignment:\n<script>`) → the script after it; a completion wake or a
  *   Worker's settle reminder → `subagent_collect` (a notice only when it names results to collect); the lead's update
@@ -91,10 +92,12 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		if (system.includes("context summarization assistant")) {
 			const focus = /\n\nAdditional focus: ([\s\S]*)$/.exec(raw)?.[1];
 			const count = (raw.match(/^\[(?:User|Assistant|Tool result)\]/gm) ?? []).length;
-			logLine(join(dir, "requests.log"), { label: "summarize", ...routed, ...(focus === undefined ? {} : { focus }) });
+			const maxTokens = (streamOptions as { maxTokens?: number } | undefined)?.maxTokens;
+			logLine(join(dir, "requests.log"), { label: "summarize", ...routed, ...(focus === undefined ? {} : { focus }), ...(maxTokens === undefined ? {} : { maxTokens }) });
 			const gate = /gate:(\S+)/.exec(focus ?? "")?.[1] ?? /summary-gate:(\S+)/.exec(raw)?.[1];
 			while (gate !== undefined && !existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 20));
 			if (focus?.includes("fail") === true || raw.includes("summary-fail")) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
+			if (raw.includes("summary-length")) return fauxAssistantMessage([fauxText("Summary cut off mid")], { stopReason: "length" });
 			return fauxAssistantMessage([fauxText(`Summary of ${count} earlier messages.${focus?.includes("slow") === true ? ` ${LONG}` : ""}`)]);
 		}
 		// PI WEB's Chat title request (its sessionNameGenerator prompt): not a turn, so not counted.

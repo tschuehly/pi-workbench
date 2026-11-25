@@ -1,5 +1,6 @@
-// Cheap wake-up: a background-job completion right after a compaction runs its turn on the provider's light-tier model
-// and restores the Chat's own model; otherwise the own model answers. hand_back reruns the turn on the own model.
+// Cheap wake-up: a background-job completion right after a compaction runs its own run on the provider's light-tier model
+// (a one-run override, never stored in the Chat's agent settings); otherwise the own model answers. hand_back reruns
+// the turn on the own model.
 // In process, on the scripted model under Anthropic model names (scriptedProviders).
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
@@ -31,7 +32,6 @@ async function chat(label: string, existing?: string) {
 	// Keep almost nothing, so a short history compacts.
 	h.workbench.compaction = { ...DEFAULT_COMPACTION, keepRecentTokens: 1 };
 	await h.resume();
-	// The session restores the own model once a cheap turn settles, as the Chat host does.
 	const session = new ChatSession(h, () => {});
 	await session.start();
 	const settle = async (id: SubmissionId) => {
@@ -51,17 +51,20 @@ async function chat(label: string, existing?: string) {
 	const prompt = async (text: string, mode?: "steer" | "followUp") => (await session.prompt({ operationId: text, text, ...(mode === undefined ? {} : { mode }) })).submissionId;
 	const requests = () => logged(store) as unknown as Request[];
 	const agent = async () => (await h.harness.snapshot(AgentDoc, h.root.id, context))!;
-	const restored = async () => {
-		for (const end = Date.now() + 10_000; (await h.harness.snapshot(CheapWakeDoc, h.root.id, context))?.turn != null; ) {
-			if (Date.now() > end) assert.fail("the cheap turn never ended");
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-	};
+	// Every write to any conversation's agent settings from now on: a cheap wake-up never makes one.
+	const agentWrites: string[] = [];
+	const observed = h.harness.observeCommits({
+		advance: (publication) => {
+			for (const change of publication.changes) if (change.type === "document" && change.record.kind === AgentDoc.definition.kind) agentWrites.push(String(change.conversationId));
+		},
+		end: () => {},
+	});
 	const close = async () => {
+		observed.detach();
 		await session.close();
 		await h.close();
 	};
-	return { h, dir, session, say, compact, wake, startWake, prompt, settle, requests, agent, restored, close };
+	return { h, dir, session, say, compact, wake, startWake, prompt, settle, requests, agent, agentWrites, close };
 }
 
 test("cheap model choice: a heavier tier's model gets its provider's light model; a light, unknown or unavailable one gets none", () => {
@@ -73,19 +76,20 @@ test("cheap model choice: a heavier tier's model gets its provider's light model
 	assert.equal(cheapModel(OWN, [{ provider: "github-copilot", id: "claude-sonnet-5-5" }]), undefined, "another provider's");
 });
 
-test("a delivery right after a compaction runs on the cheap model and restores the own model; any other delivery runs on the own model", async () => {
-	const { say, compact, wake, requests, agent, restored, close } = await chat("cheap-trigger");
+test("a delivery right after a compaction runs on the cheap model without writing the agent settings; any other delivery runs on the own model", async () => {
+	const { say, compact, wake, requests, agent, agentWrites, close } = await chat("cheap-trigger");
 	try {
 		for (const text of ["one", "two", "three"]) await say(text);
 		await compact();
+		const settings = JSON.stringify(await agent());
+		const writes = agentWrites.length;
 		await wake("job-1", "all tests passed");
-		await restored();
 		const cheap = requests().at(-1)!;
 		assert.match(cheap.label, /^Background bash job-1/);
 		assert.equal(cheap.model, "anthropic/claude-sonnet-5-5");
 		assert.ok(cheap.tools.includes("hand_back"), "the cheap turn offers hand_back");
-		assert.deepEqual((await agent()).model, OWN, "own model restored");
-		assert.ok(!JSON.stringify((await agent()).modelTools ?? {}).includes("hand_back"));
+		assert.deepEqual(agentWrites.slice(writes), [], "the cheap wake never wrote the agent settings");
+		assert.equal(JSON.stringify(await agent()), settings, "the agent settings are unchanged");
 
 		await wake("job-2", "all tests passed");
 		const own = requests().at(-1)!;
@@ -111,11 +115,12 @@ test("the idle compaction's marker entry after the summary still counts as right
 });
 
 test("hand_back ends the cheap turn and reruns it on the own model with the reason", async () => {
-	const { h, say, compact, wake, requests, agent, close } = await chat("cheap-hand-back");
+	const { h, say, compact, wake, requests, agent, agentWrites, close } = await chat("cheap-hand-back");
 	try {
 		for (const text of ["one", "two", "three"]) await say(text);
 		await compact();
 		const before = requests().length;
+		const writes = agentWrites.length;
 		await wake("job-1", "hand_back:2 tests failed");
 		await h.root.waitForIdle(context);
 		const after = requests().slice(before);
@@ -123,7 +128,9 @@ test("hand_back ends the cheap turn and reruns it on the own model with the reas
 		assert.match(after[1]!.label, /^The cheaper model handed this wake-up/);
 		const last = (await h.root.entries({}, 5, undefined, context)).items.map((e) => JSON.stringify(e.model ?? ""));
 		assert.ok(last.some((m) => m.includes("reason: 2 tests failed")), "the rerun carries the reason");
+		assert.ok(!after[1]!.tools.includes("hand_back"), "the rerun is not offered hand_back");
 		assert.deepEqual((await agent()).model, OWN);
+		assert.deepEqual(agentWrites.slice(writes), [], "neither the wake nor hand_back wrote the agent settings");
 	} finally {
 		await close();
 	}
@@ -143,21 +150,46 @@ const assertOwn = (r: Request | undefined, what: string) => {
 	assert.ok(!r.tools.includes("hand_back"), `${what}: hand_back not offered`);
 };
 
-test("owner input queued or steered during a cheap wake runs on the own model without hand_back", async () => {
-	for (const mode of ["steer", "followUp"] as const) {
-		const c = await compacted(`cheap-owner-${mode}`);
+test("owner input queued or steered during a cheap wake runs on the own model without hand_back, also when it joins the cheap run at a tool boundary", async () => {
+	// `hand_back+read`: the cheap turn makes a tool round (hand_back is refused there), so input queued during it joins the run.
+	for (const [mode, output] of [["steer", "all tests passed"], ["followUp", "all tests passed"], ["steer", "hand_back+read:x"], ["followUp", "hand_back+read:x"]] as const) {
+		const what = `${mode}${output.startsWith("hand_back") ? " joining" : ""}`;
+		const c = await compacted(`cheap-owner-${what.replace(" ", "-")}`);
 		try {
-			await c.startWake("job-1", "all tests passed");
+			const writes = c.agentWrites.length;
+			const wake = await c.startWake("job-1", output);
 			await c.settle(await c.prompt(`owner ${mode}`, mode));
+			await c.settle(wake);
 			const all = c.requests();
+			assert.equal(all.find((r) => r.label.startsWith("Background bash job-1"))?.model, "anthropic/claude-sonnet-5-5", `${what}: the wake ran cheap`);
 			const owner = all.slice(all.findIndex((r) => r.label === `owner ${mode}`));
-			assert.ok(owner.length > 0, `${mode}: no request ${JSON.stringify(all)}`);
-			for (const r of owner) assertOwn(r, `${mode}: ${r.label}`);
-			await c.restored();
+			assert.ok(owner.length > 0, `${what}: no request ${JSON.stringify(all)}`);
+			for (const r of owner) assertOwn(r, `${what}: ${r.label}`);
+			assert.deepEqual(c.agentWrites.slice(writes), [], `${what}: the agent settings were never written`);
 			assert.deepEqual((await c.agent()).model, OWN);
 		} finally {
 			await c.close();
 		}
+	}
+});
+
+test("a second background completion queued during a cheap run joins it on the own model, without hand_back", async () => {
+	const c = await compacted("cheap-second-completion");
+	try {
+		const writes = c.agentWrites.length;
+		// The cheap turn makes a tool round, so the second completion joins the run at its tool boundary.
+		const first = await c.startWake("job-1", "hand_back+read:x");
+		const second = await submitWake(c.h.root, { type: "input", content: "Background bash job-2 complete (exit 0).\nall tests passed", whenBusy: "followUp", requestId: "job-2" }, c.h.models);
+		await c.settle(first);
+		await c.settle(second);
+		const all = c.requests();
+		assert.equal(all.find((r) => r.label.startsWith("Background bash job-1"))?.model, "anthropic/claude-sonnet-5-5", "the first completion ran cheap");
+		const joined = all.filter((r) => r.label.startsWith("Background bash job-2"));
+		assert.ok(joined.length > 0, JSON.stringify(all));
+		for (const r of joined) assertOwn(r, "the second completion");
+		assert.deepEqual(c.agentWrites.slice(writes), [], "the agent settings were never written");
+	} finally {
+		await c.close();
 	}
 });
 
@@ -174,11 +206,10 @@ test("after the host stops mid-wake and reopens, the owner's next message runs o
 	}
 });
 
-test("a branch forked inside a finished cheap turn runs the owner's next message on the own model", async () => {
+test("a branch forked inside a finished cheap turn is on the own model and runs the owner's next message on it", async () => {
 	const c = await compacted("cheap-fork");
 	try {
 		await c.wake("job-1", "all tests passed");
-		await c.restored();
 		await c.say("four");
 		const tree = (await c.session.tree()) as { nodes: { id: string; message?: { role: string; content: unknown } }[]; activeLeafId: string | null };
 		const text = (content: unknown) => (typeof content === "string" ? content : JSON.stringify(content));
@@ -186,6 +217,7 @@ test("a branch forked inside a finished cheap turn runs the owner's next message
 		const before = c.h.root.id;
 		await c.session.navigate({ targetId: answer.id, expectedLeafId: tree.activeLeafId });
 		assert.notEqual(c.h.root.id, before, "forked a branch");
+		assert.deepEqual((await c.agent()).model, OWN, "the fork's stored model is the own one before any input");
 		await c.settle(await c.prompt("owner on branch"));
 		assertOwn(ownerRequests(c.requests()).at(-1), "on the branch");
 		assert.deepEqual((await c.agent()).model, OWN, "the branch keeps the own model");
@@ -200,7 +232,6 @@ test("the owner choosing the cheap model during a cheap wake keeps it", async ()
 		const id = await c.startWake("job-1", "all tests passed");
 		await c.session.setModel(LIGHT.provider, LIGHT.id);
 		await c.settle(id);
-		await c.restored();
 		assert.deepEqual((await c.agent()).model, { provider: LIGHT.provider, modelId: LIGHT.id }, "the owner's choice stands");
 	} finally {
 		await c.close();
@@ -211,9 +242,9 @@ test("hand_back batched with another call is refused before anything changes: no
 	const c = await compacted("cheap-batched");
 	try {
 		const before = c.requests().length;
+		const writes = c.agentWrites.length;
 		await c.wake("job-1", "hand_back+read:2 tests failed");
 		await c.h.root.waitForIdle(context);
-		await c.restored();
 		const after = c.requests().slice(before);
 		assert.ok(after.length >= 2, JSON.stringify(after));
 		assert.deepEqual(after.map((r) => r.model), after.map(() => "anthropic/claude-sonnet-5-5"), "the cheap turn stays cheap and nothing reruns");
@@ -221,6 +252,7 @@ test("hand_back batched with another call is refused before anything changes: no
 		assert.ok(results.some((m) => m.includes("must be called alone")), "the batched call is told to call hand_back alone");
 		assert.ok(!results.some((m) => m.includes("handed this wake-up back")), "no rerun queued");
 		assert.deepEqual((await c.agent()).model, OWN);
+		assert.deepEqual(c.agentWrites.slice(writes), [], "the agent settings were never written");
 	} finally {
 		await c.close();
 	}
@@ -229,22 +261,20 @@ test("hand_back batched with another call is refused before anything changes: no
 test("a hand_back replayed after the host stopped finishes it once: the same terminating result, one rerun", async () => {
 	const c = await compacted("cheap-replay");
 	try {
-		// The state a cheap turn is in when the model calls hand_back.
-		await c.h.root.commit(async (tx) => {
-			(await tx.doc(AgentDoc, c.h.root.id)).model = { provider: LIGHT.provider, modelId: LIGHT.id };
-			(await tx.doc(CheapWakeDoc, c.h.root.id)).turn = { own: OWN, cheap: { provider: LIGHT.provider, modelId: LIGHT.id }, submission: 1 as SubmissionId };
-		}, context);
+		await c.wake("job-1", "hand_back:2 tests failed");
+		await c.h.root.waitForIdle(context);
+		// The hand_back call's tool task, as a replay after a restart runs it again.
+		const [taskId] = Object.keys((await c.h.harness.snapshot(CheapWakeDoc, c.h.root.id, context))?.handedBack ?? {});
+		assert.ok(taskId !== undefined, "hand_back recorded its call");
 		const tool = cheapWakeExtension.tools!.find((t) => t.name === "hand_back")!;
-		const api = { conversationId: c.h.root.id, taskId: 4242, conversation: async () => c.h.root, commit: (fn: never, ctx: never) => c.h.root.commit(fn, ctx), getTask: async () => undefined };
-		const run = () => (tool.execute as (args: unknown, api: unknown, c: unknown) => Promise<{ isError?: boolean; control?: { terminate?: boolean } }>)({ reason: "x" }, api, context);
-		const first = await run();
-		const replay = await run();
-		assert.equal(first.control?.terminate, true);
+		const api = { conversationId: c.h.root.id, taskId: Number(taskId), conversation: async () => c.h.root, commit: (fn: never, ctx: never) => c.h.root.commit(fn, ctx), getTask: async () => undefined };
+		const replay = await (tool.execute as (args: unknown, api: unknown, c: unknown) => Promise<{ isError?: boolean; control?: { terminate?: boolean } }>)({ reason: "x" }, api, context);
 		assert.equal(replay.isError, undefined, "the replay is not an error");
 		assert.equal(replay.control?.terminate, true, "the replay ends the run as the first did");
 		await c.h.root.waitForIdle(context);
 		const reruns = c.requests().filter((r) => r.label.startsWith("The cheaper model handed"));
 		assert.equal(reruns.length, 1, "one rerun");
+		assert.equal(reruns[0]!.model, "anthropic/claude-opus-5-5");
 	} finally {
 		await c.close();
 	}

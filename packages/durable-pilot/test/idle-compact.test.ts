@@ -141,3 +141,9 @@ test("the note path: the Workstream ID encoded as one folder, the Chat ID in the
 	await assert.rejects(idle.writeIdleNote(() => escape, { workstreamId: "..", sessionId: "chat-1", summary: "x", firedAt: T0 }, { scratch: root }), /invalid id/);
 	assert.ok(!existsSync(join(root, "..", "idle-notes")), "nothing written outside the scratch root");
 });
+
+test("the timer's summary comes from the provider's own Sonnet or Terra, never another provider's", () => {
+	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
+	assert.equal(idle.summaryModelFor({ provider: "github-copilot" }), undefined);
+});

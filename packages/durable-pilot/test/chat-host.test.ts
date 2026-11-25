@@ -12,8 +12,8 @@ import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
 import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
-import { CheapWakeDoc, submitWake } from "../src/cheap-wake.ts";
-import { AgentDoc } from "@earendil-works/pi-durable";
+import { submitWake } from "../src/cheap-wake.ts";
+import { AgentDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { context } from "../src/host.ts";
 import { questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
@@ -561,7 +561,7 @@ async function quietChat(label: string) {
 
 /**
  * An in-process scripted Chat on an Anthropic model for the idle cache timer, with an injected delay instead of the
- * model's cache TTL and an injectable wall clock. The cheap summary model (Haiku) answers through the same script.
+ * model's cache TTL and an injectable wall clock. The summary model (Sonnet) answers through the same script.
  */
 const OPUS = { provider: "anthropic", modelId: "claude-opus-5-5" };
 async function idleChat(store: string, cwd: string, delay: () => number, options: { now?: () => number; notes?: string; keepRecentTokens?: number | null } = {}) {
@@ -595,7 +595,10 @@ async function idleChat(store: string, cwd: string, delay: () => number, options
 const PAD = `pad:${"x".repeat(330_000)}`;
 /** The model of each summary request, in order. */
 const summaries = (store: string) => readLog<{ label: string; model?: string }>(join(store, "requests.log")).filter((line) => line.label === "summarize").map((line) => line.model ?? "faux");
-const HAIKU = "anthropic/claude-haiku-5-5";
+/** The provider's timer-summary model (idle-compact.ts IDLE_SUMMARY_MODELS); the cheap wake-up's light model is the same one on Anthropic. */
+const SUMMARY = "anthropic/claude-sonnet-5-5";
+/** The output cap of each summary request, in order. */
+const summaryCaps = (store: string) => readLog<{ label: string; maxTokens?: number }>(join(store, "requests.log")).filter((line) => line.label === "summarize").map((line) => line.maxTokens);
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("idle cache timer: a viewed idle Chat with a large prompt compacts on the cheap model once its timer fires, also when a `!` command ran over it; a new prompt cancels the timer", async () => {
@@ -618,7 +621,8 @@ test("idle cache timer: a viewed idle Chat with a large prompt compacts on the c
 		await settled(3);
 		await session.shell("!sleep 2.5");
 		await until(async () => (await markers()) === 1, "the idle compaction marker");
-		assert.deepEqual(summaries(store), [HAIKU], "one idle compaction, summarized by the cheap model, never the Chat's");
+		assert.deepEqual(summaries(store), [SUMMARY], "one idle compaction, summarized by Sonnet, never the Chat's model");
+		assert.deepEqual(summaryCaps(store), [16_000], "the summary may take 16k output tokens");
 		assert.ok(events.some((e) => e.type === "shell.end"), "the command ran");
 		assert.ok(compacted(), "the summary is placed");
 	} finally {
@@ -642,7 +646,7 @@ test("idle cache timer: a restarted host arms it again, measured from the newest
 	const second = await idleChat(store, cwd, () => 8_000);
 	try {
 		await second.until(async () => (await second.markers()) === 1, "the idle compaction marker after the restart");
-		assert.deepEqual(summaries(store), [HAIKU]);
+		assert.deepEqual(summaries(store), [SUMMARY]);
 		assert.ok(Date.now() - turned < 8_000 + 1_500, "fired 8 s after the turn's request, not after the reopen");
 	} finally {
 		await second.session.close();
@@ -662,7 +666,7 @@ test("idle cache timer: one pasted turn larger than the default keep window, the
 		await settled(2);
 		await until(async () => (await markers()) === 1, "the idle compaction marker");
 		assert.ok(compacted(), "a summary is placed");
-		assert.deepEqual(summaries(store), [HAIKU]);
+		assert.deepEqual(summaries(store), [SUMMARY]);
 	} finally {
 		await session.close();
 	}
@@ -697,7 +701,25 @@ test("idle cache timer: a failed cheap summary declines the compaction with a wa
 		await until(() => warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
 		await quiet();
 		await wait(500);
-		assert.deepEqual(summaries(store), [HAIKU], "only the cheap summary was asked for");
+		assert.deepEqual(summaries(store), [SUMMARY], "only the cheap summary was asked for");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a summary cut off at its output cap declines the compaction with a warning, without a Chat-model summary", async () => {
+	const { store, cwd } = family("idle-summary-length");
+	const { session, until, settled, markers, compacted, warnings, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-length ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+		await quiet();
+		await wait(500);
+		assert.match(warnings().find((w) => w.startsWith("Idle compaction skipped"))!, /cut off at its length limit/);
+		assert.deepEqual(summaries(store), [SUMMARY], "only the timer's summary was asked for, never the Chat model's");
 		assert.equal(compacted(), false, "nothing placed");
 		assert.equal(await markers(), 0);
 	} finally {
@@ -798,10 +820,9 @@ test("idle cache timer and cheap wake: a wake after a timer compaction runs on t
 		await (await h.harness.submission(id, context))!.wait(context);
 		await settled(2);
 		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, "anthropic/claude-sonnet-5-5"]);
-		await until(async () => (await h.harness.snapshot(CheapWakeDoc, h.root.id, context))?.turn === null, "the cheap turn ended");
 		// A padded completion (the faux model answers it briefly): the cheap turn's >80k-token prompt on Sonnet, and its run reset the stretch: only its usage could arm a second compaction.
 		await wait(2_500);
-		assert.deepEqual(summaries(store), [HAIKU], "the cheap turn armed nothing");
+		assert.deepEqual(summaries(store), [SUMMARY], "the cheap turn armed nothing");
 		assert.equal(await markers(), 1);
 	} finally {
 		await session.close();
@@ -817,13 +838,13 @@ test("idle cache timer and cheap wake: a wake while the timer's cheap summary is
 		await settled(1);
 		await until(() => summaries(store).length === 1, "the timer's summary request");
 		const id = await submitWake(h.root, wakeDraft("job-1", "all tests passed"), h.models);
-		assert.equal((await h.harness.snapshot(CheapWakeDoc, h.root.id, context))?.turn ?? null, null, "no cheap turn during a timer compaction");
+		assert.equal((await h.harness.snapshot(LiveDoc, h.root.id, context))?.run?.override, undefined, "no cheap run during a timer compaction");
 		writeFileSync(gate, "");
 		await (await h.harness.submission(id, context))!.wait(context);
 		await settled(2);
 		await quiet();
 		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, `${OPUS.provider}/${OPUS.modelId}`], "the wake ran on the own model");
-		assert.deepEqual(summaries(store), [HAIKU]);
+		assert.deepEqual(summaries(store), [SUMMARY]);
 		assert.deepEqual((await h.harness.snapshot(AgentDoc, h.root.id, context))?.model, OPUS);
 	} finally {
 		await session.close();
@@ -866,7 +887,7 @@ test("idle cache timer: a restart after the summary was placed finishes the mark
 	const baseline = { workstreamId: "ws-idle-restore", checkpoint: checkpointState((await workstreams.inspect("ws-idle-restore")).sessions.find((s) => s.id === "chat-idle-timer")) };
 	const firedAt = Date.parse("2026-01-02T03:04:05.000Z");
 	await first.h.root.commit(async (tx) => {
-		(await tx.doc(IdleCacheDoc, first.h.root.id)).intent = { task: Number(task), rootId: Number(first.h.root.id), firedAt, expiresAt: Date.now() + 60_000, summaryModel: { provider: "anthropic", modelId: "claude-haiku-5-5" }, baseline };
+		(await tx.doc(IdleCacheDoc, first.h.root.id)).intent = { task: Number(task), rootId: Number(first.h.root.id), firedAt, expiresAt: Date.now() + 60_000, summaryModel: { provider: "anthropic", modelId: "claude-sonnet-5-5" }, baseline };
 	}, context);
 	await first.session.close();
 	const second = await idleChat(store, cwd, () => 600_000, { notes });

@@ -1,16 +1,14 @@
-// Cheap wake-up: a background-job completion that wakes a Chat whose context was just compacted runs that one turn on
+// Cheap wake-up: a background-job completion that wakes a Chat whose context was just compacted runs that one run on
 // a cheaper model of the same provider (each model has its own prompt cache, so only a small, cold context pays off).
-// Durable has no per-run model, so the turn stores the cheap model in `pi.agent`; it is scoped to the wake's own run:
-// - the host restores the Chat's own model once the turn's input settled (no Durable `afterRun` hook: one on every run
-//   would delay every run's end), at host start, and `hand_back` in its own commit (with the rerun it queues);
-// - owner input (`admit`) restores it in its admission commit, so it never joins a cheap run on the cheap model;
-// - the owner choosing a model ends the turn and keeps the choice;
-// - a branch forked inside the turn carries its record (`asOf`, as `pi.agent`) and restores at the owner's first input.
+// The wake's input carries a one-run override (our pi-durable patch, `InputSubmissionDraft.override`): the cheap model
+// and hand_back, used by that run's generations and tool calls only. Nothing is stored in `pi.agent`, so forks, tree
+// navigation and later runs keep the own model; any input that joins the run at a tool boundary (owner input, another
+// completion, a Subagent update) ends the override, so it never answers on the cheap model.
 import { readFileSync } from "node:fs";
 import type { Context } from "@earendil-works/chord/context";
 import { str, obj } from "@earendil-works/pi-schema";
 import {
-	AgentDoc, CompactionEntry, type Conversation, type ConversationId, defineExtension, type DocumentReader, defineTool,
+	AgentDoc, CompactionEntry, type Conversation, type ConversationId, defineExtension, defineTool,
 	InboxDoc, type InputSubmissionDraft, LiveDoc, type ModelRef, type SubmissionId, type Tx,
 } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
@@ -21,16 +19,15 @@ import { redact, sealed } from "./redact.ts";
 export const HAND_BACK = "hand_back";
 export const CHEAP_INSTRUCTION = `[Cheap wake-up] This turn runs on a cheaper model because the context was just compacted. If the result above needs no real work (tests passed, expected output), act on it briefly: report the outcome in a line or two and, if this Chat belongs to a Workstream, save it per the workstreams skill; then end the turn. If it needs real work (a failure to debug, a decision, code to change), call ${HAND_BACK} with a one-line reason and do nothing else.`;
 
-type Turn = { own: ModelRef; cheap: ModelRef; submission: SubmissionId };
-/** The running cheap turn, and each finished hand_back by its tool task (a replay after a restart finds it). */
-export const CheapWakeDoc = defineDoc<{ turn: Turn | null; handedBack: Record<string, ModelRef> }>({
+/** Each finished hand_back by its tool task, with the own model it named (a replay after a restart finds it). */
+export const CheapWakeDoc = defineDoc<{ handedBack: Record<string, ModelRef> }>({
 	kind: "workbench.cheap-wake",
 	version: 1,
 	scope: "conversation",
-	// As `pi.agent`: a fork at an entry inside the turn holds the cheap model and the record that restores it.
+	// Unchanged from the stored-model version (whose `turn` field is now ignored), so stores it wrote still open.
 	history: "rewindable",
 	fork: "asOf",
-	initial: () => ({ turn: null, handedBack: {} }),
+	initial: () => ({ handedBack: {} }),
 	checkpointWhen: () => false,
 });
 
@@ -54,8 +51,8 @@ export function cheapModel(own: ModelRef, available: readonly { provider: string
 async function eligible(tx: Tx, id: ConversationId, draft: InputSubmissionDraft): Promise<ModelRef | undefined> {
 	// A known request was admitted (and its turn decided) before: resubmit unchanged, which writes nothing.
 	if (draft.requestId !== undefined && (await tx.submissionByRequest(id, draft.requestId)) !== undefined) return undefined;
+	// Idle with an empty inbox: the wake's input starts its own run at once, which the override needs.
 	if ((await tx.doc(LiveDoc, id)).run !== undefined || (await tx.doc(InboxDoc, id)).items.length > 0) return undefined;
-	if ((await tx.doc(CheapWakeDoc, id)).turn !== null) return undefined;
 	const newest = (await tx.scanEntries({ conversationId: id }, 20)).items.find((entry) => entry.model !== undefined && entry.model.length > 0);
 	if (newest?.kind !== CompactionEntry.kind) return undefined;
 	const own = (await tx.doc(AgentDoc, id)).model;
@@ -77,50 +74,9 @@ export async function submitWake(conversation: Conversation, draft: InputSubmiss
 		const cheap = now === undefined ? undefined : cheapModel(now, available);
 		if (now === undefined || cheap === undefined) return conversation.submit(tx, draft);
 		const content = typeof draft.content === "string" ? `${draft.content}\n\n${CHEAP_INSTRUCTION}` : [...draft.content, { type: "text" as const, text: CHEAP_INSTRUCTION }];
-		const id = await conversation.submit(tx, { ...draft, content });
-		const agent = await tx.doc(AgentDoc, conversation.id);
-		agent.model = cheap;
-		// The lead's filter is an object; hand_back is deferred, so only this turn offers it.
-		if (!Array.isArray(agent.modelTools)) agent.modelTools = { ...agent.modelTools, add: [...(agent.modelTools?.add ?? []), HAND_BACK] };
-		(await tx.doc(CheapWakeDoc, conversation.id)).turn = { own: now, cheap, submission: id };
-		return id;
+		// hand_back is deferred, so only this run offers it.
+		return conversation.submit(tx, { ...draft, content, override: { model: cheap, tools: [HAND_BACK] } });
 	}, context);
-}
-
-/**
- * End a settled cheap turn: restore the own model (unless the owner picked another meanwhile).
- * shortcut: runs after the commit that settled the turn, so input queued during the cheap turn by others than the owner
- * (another delivery) may get its first request on the cheap model; run it before queued input is placed if Durable
- * offers a hook that does not delay every run.
- */
-export async function endCheapTurn(conversation: Conversation, reader: DocumentReader): Promise<void> {
-	if (((await reader.snapshot(CheapWakeDoc, conversation.id, context))?.turn ?? null) !== null) await conversation.commit((tx) => settleTurn(tx, conversation.id), context);
-}
-
-/**
- * In owner input's admission commit (`admit`), or with `keep` when the owner picks a model: end a cheap turn at once,
- * running or not, so what the owner asks never runs on the cheap model or is offered hand_back.
- */
-export async function endCheapTurnNow(tx: Tx, id: ConversationId, keep = false): Promise<void> {
-	await endTurn(tx, id, keep ? "keep" : "restore");
-}
-
-/** A settled turn ends restoring the own model; a running one only through `endCheapTurnNow` or hand_back. */
-async function settleTurn(tx: Tx, id: ConversationId): Promise<void> {
-	const turn = (await tx.doc(CheapWakeDoc, id)).turn;
-	if (turn !== null && ["done", "unanswered"].includes((await tx.submission(turn.submission))?.status ?? "done")) await endTurn(tx, id, "restore");
-}
-
-/** Clear the turn and hand_back; `restore` puts the own model back when the cheap one is still set. */
-async function endTurn(tx: Tx, id: ConversationId, model: "restore" | "keep"): Promise<Turn | undefined> {
-	const doc = await tx.doc(CheapWakeDoc, id);
-	if (doc.turn === null) return undefined;
-	const turn = JSON.parse(JSON.stringify(doc.turn)) as Turn;
-	const agent = await tx.doc(AgentDoc, id);
-	if (model === "restore" && agent.model?.provider === turn.cheap.provider && agent.model.modelId === turn.cheap.modelId) agent.model = turn.own;
-	if (!Array.isArray(agent.modelTools) && agent.modelTools?.add !== undefined) agent.modelTools = { ...agent.modelTools, add: agent.modelTools.add.filter((name) => name !== HAND_BACK) };
-	doc.turn = null;
-	return turn;
 }
 
 const sanitize = sealed(redact);
@@ -146,16 +102,19 @@ const handBack = defineTool({
 			// A replay after a restart: this call already handed back.
 			const done = doc.handedBack[key];
 			if (done !== undefined) return { ...done };
-			const turn = await endTurn(tx, api.conversationId, "restore");
-			if (turn === undefined) return undefined;
+			// Offered only by a cheap run's override, which input joining the run ends.
+			if ((await tx.doc(LiveDoc, api.conversationId)).run?.override === undefined) return undefined;
+			const model = (await tx.doc(AgentDoc, api.conversationId)).model;
+			if (model === undefined) return undefined;
+			// Queued behind the terminating round: it starts the next run, on the stored model.
 			await handle.submit(tx, {
 				type: "input",
 				whenBusy: "followUp",
 				onAbort: "keep",
 				content: `The cheaper model handed this wake-up back (reason: ${reason}). Handle the delivery above yourself.`,
 			});
-			doc.handedBack[key] = turn.own;
-			return turn.own;
+			doc.handedBack[key] = { ...model };
+			return { ...model };
 		}, c);
 		if (own === undefined) return { output: text("No cheap wake-up turn is running; continue normally."), isError: true };
 		return handedBack(own);

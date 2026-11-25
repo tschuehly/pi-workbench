@@ -24,7 +24,6 @@ import {
 } from "@earendil-works/pi-durable";
 import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
-import { endCheapTurn } from "./cheap-wake.ts";
 import { CEILING_CUSTOM_TYPE, CEILING_ENTRY, CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
 import { syncWorkersGroup } from "./tool-groups.ts";
 import { ACTIVITY_STATUS_KEY, COMPLETION_CUSTOM_TYPE, COMPLETION_ENTRY, DelegationDoc, finishCancellations, navigationCarries, roster, STUCK_CUSTOM_TYPE, STUCK_ENTRY, UPDATE_CUSTOM_TYPE, UPDATE_ENTRY } from "./delegation.ts";
@@ -451,9 +450,6 @@ export class ChatSession {
 		let rosterQueued = false;
 		const commits = this.#host.harness.observeCommits({
 			advance: (publication) => {
-				// A cheap wake-up turn ends when its input settles, which changes the lead's run state.
-				if (this.#chat !== undefined && publication.changes.some((change) => change.type === "document" && change.record.kind === LiveDoc.definition.kind && change.conversationId === this.#host.root.id))
-					setTimeout(() => void endCheapTurn(this.#host.root, this.#host.harness).catch(() => {}), 0);
 				const changed = publication.changes.some((change) => change.type === "document" && change.record.kind === DelegationDoc.definition.kind && change.conversationId === this.#host.root.id);
 				if (!changed || rosterQueued) return;
 				rosterQueued = true;
@@ -472,8 +468,6 @@ export class ChatSession {
 		this.#chat?.bash?.start(lead, this.#host.harness, { deliver, changed: () => void this.#publishStatus().catch(() => {}) });
 		await this.#chat?.atelier?.start(lead, this.#host.harness, { deliver });
 		this.#chat?.packages?.attach({ deliver });
-		// A cheap turn that settled before the host stopped.
-		if (this.#chat !== undefined) await endCheapTurn(this.#host.root, this.#host.harness);
 		const agent = await this.#host.root.agent(context);
 		this.#cwd = agent.cwd ?? "";
 		this.#record("session.start", {
@@ -1218,8 +1212,9 @@ export class ChatSession {
 	}
 
 	/**
-	 * Arm the idle prompt-cache timer from the newest request, when the Chat's own stored model made it (a cheap wake-up
-	 * turn's model has its own cache): it fires a minute before that request's cache entry expires, counted from when the
+	 * Arm the idle prompt-cache timer from the newest request, when the Chat's own stored model made it: the model on the
+	 * request's message is the run's actual one, and a cheap wake-up's override is never stored, so its run (whose model
+	 * has its own cache) arms nothing. It fires a minute before that request's cache entry expires, counted from when the
 	 * request started, as the provider's TTL is. A restored Chat inside that last minute fires at once; one whose cache
 	 * already expired gets none. Only while a browser shows the Chat (`setViewed` arms it again).
 	 */
