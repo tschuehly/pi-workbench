@@ -85,7 +85,7 @@ export const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.ever
 export function challengeDecides(attention: string) {
   const his = attention === "AFK"
     ? "do not contact him: list it for his return, pause only the work it affects and continue independent work"
-    : "ask him through the channel your Attention setting uses for questions (`ask_user`, or `ask_human` while Phone sends questions by phone)";
+    : "ask him wherever your other Working Mode guidance routes questions";
   return `Once any confirmation your Alignment setting requires is reached, decide a design choice that is reversible and inside the agreed goal yourself with an advisor (\`openai/gpt-6.2-sol\`, high) instead of asking Thomas: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue. A choice that changes the goal, the scope or a success check, or cannot be undone, stays Thomas's: ${his}.`;
 }
 const challengeLine = (attention: string) => `Checking Challenge${attention === "Default" ? "" : ` with Attention ${attention}`}: ${challengeDecides(attention)}`;

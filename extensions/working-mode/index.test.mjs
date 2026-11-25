@@ -472,9 +472,14 @@ test("Checking Challenge: after any required confirmation the agent decides reve
       if (attention === "AFK") {
         assert.match(block, /stays Thomas's: do not contact him: list it for his return, pause only the work it affects and continue independent work\./);
         assert.doesNotMatch(block, /stays Thomas's: ask him/);
-      } else assert.match(block, /stays Thomas's: ask him through the channel your Attention setting uses for questions/, attention);
+      } else assert.match(block, /stays Thomas's: ask him wherever your other Working Mode guidance routes questions\./, attention);
+      // Where to ask stays with Attention and Cockpit; the rule names no channel of its own.
+      assert.doesNotMatch(block.slice(block.indexOf("Checking Challenge")), /ask_user|ask_human/, attention);
     }
   }
+  const cockpit = renderBlock({ ...defaults, attention: "Focused", checking: "Challenge", orchestration: "Cockpit" }, 1, true);
+  assert.match(cockpit, /Ask every question as a Page Decision/);
+  assert.match(cockpit, /stays Thomas's: ask him wherever your other Working Mode guidance routes questions\./);
   // While AFK waits for alignment, its preparation asks every foreseeable question; the rule starts with AFK itself.
   const waiting = { ...defaults, alignment: "Align", attention: "AFK", checking: "Challenge" };
   assert.doesNotMatch(renderBlock(waiting, 1, false), decides);
