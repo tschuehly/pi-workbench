@@ -43,7 +43,7 @@ export const IDLE_INSTRUCTIONS: string = compactionInstructions({
 });
 
 /** The model of each provider that writes a timer compaction's summary (same provider only). */
-export const IDLE_SUMMARY_MODELS: Readonly<Record<string, string>> = { anthropic: "claude-sonnet-5-5", "openai-codex": "gpt-6.1-terra" };
+export const IDLE_SUMMARY_MODELS: Readonly<Record<string, string>> = { anthropic: "claude-sonnet-5-5", "openai-codex": "gpt-6.1-terra", openai: "gpt-6.1-terra" };
 // Sonnet hit 8k in 2 of 8 backtest samples; a summary that hits this cap is truncated and declined.
 const SUMMARY_MAX_TOKENS = 16_000;
 const SUMMARY_TIMEOUT_MS = 180_000;
@@ -70,7 +70,7 @@ export function idleDelayMs(model: Model<Api> | undefined, usages: readonly Usag
 	const granted = (write?.cacheWrite1h ?? 0) > 0;
 	const long = model.promptCache?.long !== undefined && !deniedByCompat && granted;
 	let ttl = getPromptCacheTtlMs(model, { cacheRetention: long ? CACHE_RETENTION : "short" });
-	if (ttl === undefined && model.provider === "openai-codex" && /sol|terra|astra/.test(model.id)) ttl = CODEX_TTL_MS;
+	if (ttl === undefined && (model.provider === "openai-codex" || model.provider === "openai") && /sol|terra|astra/.test(model.id)) ttl = CODEX_TTL_MS;
 	return ttl === undefined ? undefined : Math.max(0, ttl - LEAD_MS);
 }
 

@@ -47,6 +47,8 @@ test("an uncached request arms nothing; Codex gets its measured 30 min only for 
 	for (const id of ["gpt-6.2-sol", "gpt-5.6-terra", "gpt-6.2-astra"]) assert.equal(delay(codex(id), [usage(50_000, 0)]), 29 * 60_000, id);
 	for (const id of ["gpt-6-luna", "gpt-6-mini", "codex-other"]) assert.equal(delay(codex(id), [usage(50_000, 0)]), undefined, `${id}: unknown TTL`);
 	assert.equal(delay(codex("gpt-6.2-sol"), [usage(0, 0)]), undefined, "Codex, uncached");
+	// The ChatGPT sign-in can also be the `openai` provider (this Mac's only Codex login).
+	assert.equal(delay(model(undefined, { provider: "openai", id: "gpt-6.2-sol" }), [usage(50_000, 0)]), 29 * 60_000, "openai Sol");
 });
 
 async function workstream(id: string, sessions: string[]) {
@@ -147,6 +149,7 @@ test("the note path: the Workstream ID encoded as one folder, the Chat ID in the
 test("the timer's summary comes from the provider's own Sonnet or Terra, never another provider's", () => {
 	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-opus-5-5" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
 	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.2-sol" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "openai", modelId: "gpt-6.2-astra" }), { provider: "openai", modelId: "gpt-6.1-terra" }, "the ChatGPT sign-in as provider openai");
 	assert.equal(idle.summaryModelFor({ provider: "github-copilot", modelId: "claude-opus-5-5" }), undefined);
 });
 
