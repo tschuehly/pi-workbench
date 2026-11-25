@@ -174,10 +174,23 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 /** The image types PI WEB attaches (its `parsePromptAttachments`), which every model provider accepts. */
 const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
-/** A prompt's or answer's `images` as image blocks, or undefined when absent; anything else is refused. */
-function imageBlocks(images: unknown): { type: "image"; data: string; mimeType: string }[] | undefined {
+/** PI WEB's answer-image limits (its ask route and store), checked again here before a close commits. */
+const ANSWER_IMAGE_LIMIT = 16;
+const ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+
+/** A prompt's or answer's `images` as image blocks, or undefined when absent; anything else is refused. `answer`: also PI WEB's answer-image limits. */
+function imageBlocks(images: unknown, answer = false): { type: "image"; data: string; mimeType: string }[] | undefined {
 	if (images === undefined) return undefined;
 	if (!Array.isArray(images) || !images.every((i) => typeof i?.data === "string" && IMAGE_TYPES.includes(i?.mimeType))) throw new Error("images must be image blocks of image/jpeg, image/png, image/gif or image/webp");
+	if (answer) {
+		if (images.length > ANSWER_IMAGE_LIMIT) throw new Error(`answers take at most ${ANSWER_IMAGE_LIMIT} images`);
+		images.forEach(({ data }: { data: string }, index) => {
+			const n = index + 1;
+			if (data.length % 4 !== 0 || !BASE64.test(data)) throw new Error(`image ${n} is not valid base64`);
+			if ((data.length / 4) * 3 - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0) > ANSWER_IMAGE_BYTES) throw new Error(`image ${n} is larger than 10 MiB`);
+		});
+	}
 	return images.map((i: { data: string; mimeType: string }) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
 }
 
@@ -201,7 +214,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	closeAsk: (params) => {
 		const outcome = params.outcome as CloseAsk["outcome"] | undefined;
 		if (outcome === undefined || typeof outcome !== "object" || typeof params.content !== "string") throw new Error("closeAsk needs outcome and content");
-		const images = imageBlocks(params.images);
+		const images = imageBlocks(params.images, true);
 		return session.closeAsk({
 			askId: text(params, "askId"),
 			operationId: text(params, "operationId"),

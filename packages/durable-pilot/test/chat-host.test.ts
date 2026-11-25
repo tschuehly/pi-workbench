@@ -669,6 +669,10 @@ test("ask_user images: closeAsk with images delivers the answers text plus the i
 		host.call<{ result: string; retried?: boolean }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId, outcome: answered(opened.ask.askId), content: "Answers: target staging", images });
 	await assert.rejects(close("op-bad", [{ data: PNG, mimeType: "image/svg+xml" }]), /images must be image blocks of image\/jpeg, image\/png, image\/gif or image\/webp/);
 	await assert.rejects(close("op-bad", [{ mimeType: "image/png" }]), /images must be image blocks/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "not base64" }]), /image 1 is not valid base64/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "iVBORw0" }]), /image 1 is not valid base64/, "a length that is no multiple of 4");
+	await assert.rejects(close("op-bad", Array.from({ length: 17 }, () => ({ mimeType: "image/png", data: PNG }))), /at most 16 images/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "A".repeat(Math.ceil(10 * 1024 * 1024 / 3) * 4 + 4) }]), /image 1 is larger than 10 MiB/);
 	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.length, 1, "a refused close leaves the set open");
 	const image = { type: "image", data: PNG, mimeType: "image/png" };
 	assert.equal((await close("op-i1", [image])).result, "closed");
