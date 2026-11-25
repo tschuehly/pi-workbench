@@ -41,7 +41,9 @@ remove repository or conversational instructions. A clean Pi profile is not part
 Attention controls consultation and how Pia reaches Thomas. The confirmed presets are
 `Focused | Switching | Phone | AFK`, plus a neutral `Default` that adds no Attention guidance.
 They are explicit selections, not device or presence detection: Pia cannot tell whether Thomas is
-in the conversation, so the selected value alone chooses the channel.
+in the conversation, so the selected value chooses the default channel; the exceptions (Phone while
+Thomas replies in the conversation, a reachable Cockpit Page) are under "Questions follow the
+Attention channel" below.
 
 | Value | Interaction behavior |
 | --- | --- |
@@ -51,7 +53,7 @@ in the conversation, so the selected value alone chooses the channel.
 | `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools. Send one update when a milestone finishes or work stops to wait. When Thomas writes in the conversation he is temporarily at his computer: answer and ask there (decisions via `ask_user`) while he replies there; after a conversation question stays unanswered for 15 minutes, questions and updates go by phone again. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` (its own guidance covers Default); AFK lists
+Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` by default (its own guidance covers Default; Cockpit moves them to its Page); AFK lists
 them for Thomas's return instead. When Pia settles in AFK with nothing running after work the last
 checkpoint does not cover, the extension asks her once to write the closing checkpoint (or, without
 a Workstream, one self-contained final message). On return, Thomas runs `/back`: it drops the
