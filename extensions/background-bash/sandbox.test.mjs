@@ -2,13 +2,13 @@
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -368,20 +368,33 @@ test("git history: commits, branch deletes and fetches work; the command cannot 
   assert.equal(git(hist, "for-each-ref", "--format=%(refname)", "refs/heads/fetched").trim(), "refs/heads/fetched");
 });
 
+// Runs inside a fence too: it only builds the environment, so pnpm 12's lock folder is checked even where the
+// fenced-run tests skip themselves.
+test("pnpm 12's lock folder: XDG_RUNTIME_DIR is one user-only folder in the agents' caches, never /tmp", () => {
+  const fake = mkdtempSync(join(root, "env-home-"));
+  const env = fencedEnv({ PATH: process.env.PATH, XDG_RUNTIME_DIR: "/tmp" }, fake, undefined);
+  assert.equal(env.XDG_RUNTIME_DIR, join(realpathSync(fake), ".pi-workbench", "sandbox-caches", "runtime"));
+  assert.equal(statSync(env.XDG_RUNTIME_DIR).mode & 0o777, 0o700);
+  assert.equal(fencedEnv({}, fake, undefined).XDG_RUNTIME_DIR, env.XDG_RUNTIME_DIR, "every fenced job shares it");
+});
+
 test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {
   const shared = mkdtempSync(join(tmpdir(), "fence-shared-"));
   mkdirSync(join(home, ".gradle", "caches", "modules-2"), { recursive: true });
   mkdirSync(join(home, ".npm"), { recursive: true });
   mkdirSync(join(home, "Library", "Caches", "ms-playwright"), { recursive: true });
   mkdirSync(join(home, ".cache"), { recursive: true });
+  mkdirSync(join(home, "Library", "pnpm", "store"), { recursive: true });
   try {
     const job = await run([
       'echo "tmp=$TMPDIR"', 'touch "${TMPDIR}t" && echo TMP_OK',
       'ln -sfn / "${TMPDIR%/}" 2>/dev/null && echo RELINKED || echo RELINK_DENIED',
       `touch "${join(shared, "x")}" 2>/dev/null && echo SHARED_WRITTEN || echo SHARED_DENIED`,
       'touch /private/tmp/fence-x-$$ 2>/dev/null && { rm -f /private/tmp/fence-x-$$; echo SLASHTMP_WRITTEN; } || echo SLASHTMP_DENIED',
-      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright Library/Caches .cache; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
+      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright Library/Caches .cache Library/pnpm/store; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
       'mkdir -p "$GRADLE_USER_HOME" "$npm_config_cache" "$PLAYWRIGHT_BROWSERS_PATH" && echo AGENT_CACHES_OK',
+      // pnpm 12 locks its store in XDG_RUNTIME_DIR, only if just this user can write it (else /tmp, denied above).
+      'mkdir "$XDG_RUNTIME_DIR/pnpm-store-operation-locks" && echo "runtime=$XDG_RUNTIME_DIR $(stat -f %Lp "$XDG_RUNTIME_DIR")"',
       'echo "ro=$GRADLE_RO_DEP_CACHE"; echo "maven=$MAVEN_OPTS"',
     ].join("; "));
     assert.equal(job.state, "complete", job.error);
@@ -392,7 +405,7 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.equal(realpathSync(link), realpathSync(piTmp));
     // In production 42 bytes under /Users/<name>, so sockets there fit (this fake home is too long to show it).
     assert.match(link, /\/\.pi-workbench\/t\/[0-9a-f]{12}$/);
-    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
+    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "DENIED Library/pnpm/store", "AGENT_CACHES_OK", `runtime=${join(caches, "runtime")} 700`, `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
 });

@@ -241,6 +241,10 @@ function shortTmp(home, piTmp) {
 export function fencedEnv(env, home, grantedTmp) {
   const caches = join(real(home), AGENT_CACHES);
   mkdirSync(caches, { recursive: true, mode: 0o700 });
+  // pnpm 12 keeps its store operation locks in XDG_RUNTIME_DIR when only this user can write it, else in /tmp, which
+  // no fence grants. One folder for every fenced job, so they all lock the shared agent store in the same place.
+  const runtime = join(caches, "runtime");
+  mkdirSync(runtime, { recursive: true, mode: 0o700 });
   for (const [from, to] of SEEDS) seed(join(real(home), from), join(caches, to), real(home));
   const gradleCaches = join(real(home), ".gradle", "caches");
   return {
@@ -260,6 +264,7 @@ export function fencedEnv(env, home, grantedTmp) {
     GOCACHE: join(caches, "go-build"),
     // clang (and Swift) keep compiled modules in the per-user cache folder, which no fence grants.
     CLANG_MODULE_CACHE_PATH: join(caches, "clang-modules"),
+    XDG_RUNTIME_DIR: runtime,
   };
 }
 
