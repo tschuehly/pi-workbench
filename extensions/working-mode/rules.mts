@@ -5,9 +5,9 @@ export const axes = {
     label: "Alignment",
     values: {
       Default: "",
-      Align: "Investigate freely, but before the first edit, delegation, or long-running job on nontrivial work, stop and confirm shared understanding: post one `ask_user` set whose context states the outcome, scope, consequential assumptions, and how success will be checked in at most five bullets, with a question to confirm or correct them (under Phone Attention, ask through `ask_human` instead; without `ask_user`, ask in the conversation), and wait for his answer. Do not ask again about what he already confirmed. After confirmation, implement one bounded slice and return with evidence before starting the next. Record lasting decisions in existing documentation.",
-      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance through `ask_user` (its summary and the file path in the context; under Phone Attention, through `ask_human`) and wait for it before editing code. Reuse the accepted plan and adapt ordinary tactics within it.",
-      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance through `ask_user` (its summary and the file path in the context; under Phone Attention, through `ask_human`) and wait for it before editing code. Reuse the accepted specification; adapt implementation within its criteria.",
+      Align: "Investigate freely, but before the first edit, delegation, or long-running job on nontrivial work, stop and confirm shared understanding: post one `ask_user` set whose context states the outcome, scope, consequential assumptions, and how success will be checked in at most five bullets, with `approval: true` so he can approve or correct them (under Phone Attention, ask through `ask_human` instead; without `ask_user`, ask in the conversation), and wait for his answer. Do not ask again about what he already confirmed. After confirmation, implement one bounded slice and return with evidence before starting the next. Record lasting decisions in existing documentation.",
+      Plan: "Before implementation, persist a plan with the outcome, approach, boundaries, and evidence, then obtain Thomas's acceptance through `ask_user` with `approval: true` (its summary and the file path in the context; under Phone Attention, through `ask_human`) and wait for it before editing code. Reuse the accepted plan and adapt ordinary tactics within it.",
+      Spec: "Before implementation, persist a specification with user stories, required behavior, constraints, and acceptance criteria, then obtain Thomas's acceptance through `ask_user` with `approval: true` (its summary and the file path in the context; under Phone Attention, through `ask_human`) and wait for it before editing code. Reuse the accepted specification; adapt implementation within its criteria.",
     },
   },
   attention: {
@@ -67,7 +67,7 @@ export const afkPending = (selection: WorkingModeState, aligned: boolean) =>
   selection.attention === "AFK" && selection.alignment !== "Default" && !aligned;
 
 export function afkPreparationText(selection: WorkingModeState) {
-  return `AFK has not started: alignment is not reached yet. Prepare to go AFK while Thomas is still here: stay interactive in this conversation and do not use phone tools. Post one \`ask_user\` set: its context holds ${afkPreparation[selection.alignment]}; add a question to confirm or correct it and one question for every issue you can foresee while he is away, each with your default as the recommended option. Without \`ask_user\`, do the same in one message with a numbered list of those questions. Wait for his answers. Once he confirms, call \`${ALIGNMENT_TOOL}\` with the agreed outcome and checklist; from then on the AFK rules apply.`;
+  return `AFK has not started: alignment is not reached yet. Prepare to go AFK while Thomas is still here: stay interactive in this conversation and do not use phone tools. Post one \`ask_user\` set: its context holds ${afkPreparation[selection.alignment]}; set \`approval: true\` so he can approve or correct it, and add one question for every issue you can foresee while he is away, each with your default as the recommended option. Without \`ask_user\`, do the same in one message with a numbered list of those questions. Wait for his answers. Once he confirms, call \`${ALIGNMENT_TOOL}\` with the agreed outcome and checklist; from then on the AFK rules apply.`;
 }
 
 export const CUSTOM_TYPE = "working-mode";
@@ -81,6 +81,15 @@ export function isSelection(value: any): value is WorkingModeState {
 
 export const same = (a: WorkingModeState, b: WorkingModeState) => axisNames.every((axis) => a[axis] === b[axis]);
 
+/** Checking Challenge's rule for design choices, worded for the Attention value; added after the per-axis guidance (Thomas, 25 Nov 2026). */
+export function challengeDecides(attention: string) {
+  const his = attention === "AFK"
+    ? "do not contact him: list it for his return, pause only the work it affects and continue independent work"
+    : "ask him wherever your other Working Mode guidance routes questions";
+  return `Once any confirmation your Alignment setting requires is reached, decide a design choice that is reversible and inside the agreed goal yourself with an advisor (\`openai/gpt-6.2-sol\`, high) instead of asking Thomas: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue. A choice that changes the goal, the scope or a success check, or cannot be undone, stays Thomas's: ${his}.`;
+}
+const challengeLine = (attention: string) => `Checking Challenge${attention === "Default" ? "" : ` with Attention ${attention}`}: ${challengeDecides(attention)}`;
+
 export function renderBlock(selection: WorkingModeState, seq: number, aligned = false, sent = false) {
   const summary = axisNames.map((axis) => `${axes[axis].label}: ${selection[axis]}`).join(" · ");
   const guidance = axisNames
@@ -88,6 +97,8 @@ export function renderBlock(selection: WorkingModeState, seq: number, aligned = 
     .map((axis) => axis === "attention" && afkPending(selection, aligned)
       ? `Attention — AFK (preparing): ${afkPreparationText(selection)}`
       : `${axes[axis].label} — ${selection[axis]}: ${(axes[axis].values as Record<string, string>)[selection[axis]]}`);
+  // While AFK waits for alignment, its preparation asks Thomas every foreseeable question instead.
+  if (selection.checking === "Challenge" && !afkPending(selection, aligned)) guidance.push(challengeLine(selection.attention));
   return [
     `<working-mode seq="${seq}">`,
     `Thomas selected Working Mode ${summary}.${aligned ? " Alignment is reached. When Thomas changes the scope or direction, call `alignment_reset` before continuing." : ""}`,
@@ -114,8 +125,8 @@ export const alignmentResetTool = {
 };
 
 /** Result text of `alignment_reached`; `wasPending` when AFK waited for this alignment. */
-export function alignmentReachedText(wasPending: boolean) {
-  return wasPending ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}` : "Alignment recorded.";
+export function alignmentReachedText(wasPending: boolean, selection: WorkingModeState) {
+  return wasPending ? `Alignment recorded. AFK starts now: ${axes.attention.values.AFK}${selection.checking === "Challenge" ? `\n\n${challengeLine("AFK")}` : ""}` : "Alignment recorded.";
 }
 
 /** Result text of `alignment_reset` for the selection after the reset. */

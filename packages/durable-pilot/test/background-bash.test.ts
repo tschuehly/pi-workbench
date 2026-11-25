@@ -5,11 +5,14 @@
 // reattaches to the live runner, a machine restart (runner gone) reports an unknown exit and never reruns.
 import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
+import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
 import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -84,6 +87,69 @@ test("P078/P081 bash runs in the background by default: a job ID returns at once
 	assert.equal(launches(cwd), 1);
 	const status = await host.call<Status>("status");
 	assert.equal(status.extensionStatuses?.["pi-workbench:background-bash"], undefined, "no running job is shown");
+	await host.close();
+});
+
+test("an owner run is an unfenced background job of the lead: launched once per operation, its completion wakes the idle Chat with the run marked", async () => {
+	const { store, cwd } = family("owner-run");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:1", command: "echo x >> launches.log; pwd; exit 7", cwd };
+	const started = await host.call<{ jobId: string; logPath: string }>("ownerRun", request);
+	assert.equal((await host.call<{ jobId: string }>("ownerRun", request)).jobId, started.jobId, "a retried request names the same job");
+	assert.equal(JSON.parse(readFileSync(join(JOBS, started.jobId, "job.json"), "utf8")).fullAccess, true, "outside the write fence");
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion waking the Chat");
+	const [completion, ...more] = await completions(host);
+	assert.equal(more.length, 0);
+	assert.match(textOf(completion!.content), new RegExp(`^\\[Owner run result\\] .*untrusted data.*\\nBackground bash ${started.jobId} failed \\(exit 7\\)\\.\\nFull output: .*\\n${cwd}\\n$`, "s"));
+	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
+test("an owner run masks a private key that never ends, and once its job record is pruned the same operation is refused, not run again", async () => {
+	const { store, cwd } = family("owner-run-pruned");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:pruned", command: `echo x >> launches.log; printf -- '-----BEGIN PRIVATE KEY-----\\nKEYBODY${"A".repeat(60)}\\n'`, cwd };
+	const started = await host.call<{ jobId: string }>("ownerRun", request);
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion");
+	const [completion] = await completions(host);
+	assert.doesNotMatch(textOf(completion!.content), /KEYBODY/);
+	rmSync(join(JOBS, started.jobId), { recursive: true }); // the registry's weekly prune
+	await assert.rejects(host.call("ownerRun", request), /already ran/);
+	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
+test("an owner run whose launch failed after its record committed launches on the retry", async () => {
+	const { store, cwd } = family("owner-run-unlaunched");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:unlaunched", command: "echo x >> launches.log", cwd };
+	// The host's job ID for this operation (background-bash.ts jobId; the Chat ID is the store without --session-id).
+	const hex = createHash("sha256").update(`bash\0${store}\0owner-run\0${request.operationId}`).digest("hex");
+	const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+	mkdirSync(JOBS, { recursive: true });
+	writeFileSync(join(JOBS, id), ""); // the registry cannot make the job's folder
+	await assert.rejects(host.call("ownerRun", request));
+	rmSync(join(JOBS, id));
+	assert.equal((await host.call<{ jobId: string }>("ownerRun", request)).jobId, id);
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion");
+	assert.equal(launches(cwd), 1, "ran once, on the retry");
+	await host.close();
+});
+
+test("an owner run whose job record is lost before its completion is delivered is refused on a retry, not run again", async () => {
+	const { store, cwd } = family("owner-run-lost");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:lost", command: "echo x >> launches.log; sleep 1", cwd };
+	const started = await host.call<{ jobId: string }>("ownerRun", request);
+	await waitFor(() => launches(cwd) === 1, "the command ran");
+	rmSync(join(JOBS, started.jobId), { recursive: true }); // a lost registry while it still runs: nothing delivered yet
+	await assert.rejects(host.call("ownerRun", request), /already ran/);
+	await sleep(1500);
+	assert.equal(launches(cwd), 1, "ran once");
 	await host.close();
 });
 
@@ -584,3 +650,72 @@ test("an explicit end refuses a bash call already past its intent commit: the la
 		bash.close();
 	}
 });
+
+test("write and edit tools meet the write fence of the Chat's commands: its checkout is writable, a folder outside and its git config are not; /full-access lifts it for the lead only", { skip: process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, where the host leaves its tools to the outer one; run from an unfenced shell" }, async () => {
+	const { store, cwd } = family("write-fence");
+	// Outside every grant: this account's own sandbox state, which no fence ever grants (sandbox.mjs).
+	const outside = join(userInfo().homedir, ".pi-workbench", "sandbox", `write-fence-test-${String(process.pid)}`);
+	// Astra review of 667f26b: the Chat's own write tool goes through the sandboxed helper (chat.ts env factory), seen
+	// by a sandbox-exec that logs each call and then runs Apple's.
+	const calls = join(ROOT, "sandbox-calls.log");
+	const wrapper = join(ROOT, "sandbox-exec-logged");
+	writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec /usr/bin/sandbox-exec "$@"\n`, { mode: 0o755 });
+	process.env.PI_SANDBOX_EXEC = wrapper;
+	const host = new ChatHost(store, cwd);
+	try {
+		await host.ready;
+	} finally {
+		delete process.env.PI_SANDBOX_EXEC;
+	}
+	await host.call("prompt", { operationId: "op-in", text: call("write", { path: "inside.txt", content: "in" }) });
+	const written = await toolEnd(host);
+	assert.equal(written.isError, false, String(written.text));
+	assert.match(readFileSync(calls, "utf8"), /mkdir -p .* \S*inside\.txt/, "written by the fenced helper");
+	await host.call("prompt", { operationId: "op-out", text: call("write", { path: outside, content: "out" }) });
+	const refused = await toolEnd(host, 2);
+	assert.equal(refused.isError, true);
+	assert.match(String(refused.text), /outside this Chat's write folders/);
+	await host.call("prompt", { operationId: "op-git", text: call("edit", { path: join(ROOT, ".git", "config"), edits: [{ oldText: "[core]", newText: "[core]\n\thooksPath = /dev/null" }] }) });
+	const git = await toolEnd(host, 3);
+	assert.equal(git.isError, true);
+	assert.match(String(git.text), /outside this Chat's write folders/);
+	await host.close();
+	assert.equal(readFileSync(join(cwd, "inside.txt"), "utf8"), "in");
+	assert.equal(existsSync(outside), false);
+	assert.doesNotMatch(readFileSync(join(ROOT, ".git", "config"), "utf8"), /hooksPath/);
+	// The owner's switch, as the dialog answers it: the lead's tools write where its commands then may, a Subagent's never.
+	const bash = new BackgroundBash({ chatId: "chat-write-fence", cwd, rootId: () => "lead" as never, root: JOBS });
+	const away = mkdtempSync(`${outside}-race-`);
+	try {
+		assert.ok(await bash.writeRefusal(outside, cwd, "lead" as never));
+		// D13: the Chat's environment writes in the fence, so a folder swapped for a link after the approval leads nowhere.
+		mkdirSync(join(cwd, "sub"));
+		assert.equal(await bash.writeRefusal(join(cwd, "sub", "x.txt"), cwd, "lead" as never), undefined);
+		rmSync(join(cwd, "sub"), { recursive: true });
+		symlinkSync(away, join(cwd, "sub"));
+		const raced = await bash.env({ cwd, shellEnv: {} }, "lead" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+		assert.equal(raced.ok ? "written" : raced.error.code, "permission_denied");
+		assert.deepEqual(readdirSync(away), []);
+		// Astra rounds 5-6: codemode's temp folder is made inside the fence (PI_TMP), never in OS temp, and written fenced.
+		const piTmp = join(cwd, "pi-tmp");
+		const env = bash.env({ cwd, shellEnv: { PI_TMP: piTmp, PI_SANDBOX_EXEC: wrapper } }, "lead" as never);
+		const temp = await env.createTempDir("write-fence-", {} as never);
+		assert.ok(temp.ok);
+		assert.match(temp.value.slice(piTmp.length), /^\/write-fence-[0-9a-f]{12}$/);
+		assert.ok(temp.value.startsWith(piTmp));
+		assert.equal((await env.writeFile(join(temp.value, "own.txt"), "own", {} as never)).ok, true, "codemode writes its temp folder");
+		assert.match(readFileSync(calls, "utf8"), /mkdir -m 700 .* \S*write-fence-[0-9a-f]{12}/, "made by the fenced helper");
+		const noTmp = await bash.env({ cwd, shellEnv: { PI_TMP: "" } }, "lead" as never).createTempDir("x-", {} as never);
+		assert.equal(noTmp.ok ? "made" : noTmp.error.code, "permission_denied", "no temp folder outside the fence");
+		await bash.fullAccess("on", "test", async () => true);
+		assert.equal(await bash.writeRefusal(outside, cwd, "lead" as never), undefined);
+		assert.ok(await bash.writeRefusal(outside, cwd, "child" as never), "a Subagent stays fenced");
+		const child = await bash.env({ cwd, shellEnv: {} }, "child" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+		assert.equal(child.ok, false, "a Subagent's writes stay fenced");
+		assert.deepEqual(readdirSync(away), []);
+	} finally {
+		bash.close();
+		rmSync(away, { recursive: true, force: true });
+	}
+});
+

@@ -41,17 +41,19 @@ remove repository or conversational instructions. A clean Pi profile is not part
 Attention controls consultation and how Pia reaches Thomas. The confirmed presets are
 `Focused | Switching | Phone | AFK`, plus a neutral `Default` that adds no Attention guidance.
 They are explicit selections, not device or presence detection: Pia cannot tell whether Thomas is
-in the conversation, so the selected value alone chooses the channel.
+in the conversation, so the selected value chooses the default channel; the exceptions (Phone while
+Thomas replies in the conversation, a reachable Cockpit Page) are under "Questions follow the
+Attention channel" below.
 
 | Value | Interaction behavior |
 | --- | --- |
 | `Default` | Add no Attention-specific behavior; existing instructions apply. |
 | `Focused` | Thomas is watching: work in short, reported steps and post each decision with `ask_user` as soon as it arises. |
 | `Switching` | Thomas reads occasionally: keep working on unblocked parts and post each open decision with `ask_user` (short context, options with consequences, one recommended), updating or withdrawing it when it changes; write in the conversation only when blocked or finished, as one short message readable without the earlier conversation (write-for-humans), and call `request_attention` when Thomas must act. |
-| `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools and never in the conversation, even if Thomas also replies there. Send one update when a milestone finishes or work stops to wait. |
+| `Phone` | Ask only real blockers, using concise, self-contained questions through the existing phone tools. Send one update when a milestone finishes or work stops to wait. When Thomas writes in the conversation he is temporarily at his computer: answer and ask there (decisions via `ask_user`) while he replies there; after a conversation question stays unanswered for 15 minutes, questions and updates go by phone again. |
 | `AFK` | Never contact Thomas. Consult advisors for material judgment; use the adaptation and fallback rules below. |
 
-Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` (its own guidance covers Default); AFK lists
+Only Phone uses `ask_human` and `notify_human`. Every other value posts decisions with PI WEB's `ask_user` by default (its own guidance covers Default; Cockpit moves them to its Page); AFK lists
 them for Thomas's return instead. When Pia settles in AFK with nothing running after work the last
 checkpoint does not cover, the extension asks her once to write the closing checkpoint (or, without
 a Workstream, one self-contained final message). On return, Thomas runs `/back`: it drops the
@@ -91,7 +93,9 @@ for a new agreement, and so does a new task: Pia calls `alignment_reset` and pre
 ### Questions follow the Attention channel
 
 Open questions for Thomas go through the channel the Attention value selects: the conversation
-for Default, Focused, and Switching, the phone tools for Phone. AFK lists them for Thomas's return
+for Default, Focused, and Switching, the phone tools for Phone (the conversation while Thomas replies
+there, by phone again after a conversation question waits 15 minutes). Orchestration Cockpit moves
+them to its Page as Decisions unless the Page is unreachable. AFK lists them for Thomas's return
 in the final message or Workstream checkpoint. Working Mode does not persist questions as Workstream
 Human Tasks. Include the question, recommendation, affected work, and any provisional action
 needed to understand the choice.
@@ -114,6 +118,16 @@ Checking specifies the evidence needed before claiming completion. Attention or 
 not silently lower it. Owner direction, repository policy, or task consequences may require
 stronger evidence. If the selected evidence cannot be produced, report the gap rather than claim
 it was satisfied. Independent scrutiny does not replace automated proof.
+
+With `Challenge`, under every Attention value and once any confirmation the Alignment value requires
+is reached, the agent decides a design choice that is reversible and inside the agreed goal itself
+with an advisor (Sol, high), records the choice, the advice and how to undo it in the Workstream's
+DECISIONS file, and continues. A choice that changes the goal, the scope or a success check, or
+cannot be undone, stays Thomas's: the agent asks him wherever its other Working Mode rules route
+questions (Attention's channel, or the Cockpit Page), and while `AFK` it does not contact him but lists the question for his return, pauses only
+the work it affects and continues independent work. While AFK still waits for alignment, its
+preparation asks every foreseeable question instead; the rule starts with AFK (Thomas, 25 Nov 2026;
+`challengeDecides` in `extensions/working-mode/rules.mts`).
 
 Use [model-orchestration](../../skills/model-orchestration/SKILL.md) for independent routing.
 Existing consequence-based checking requirements remain in effect; this redesign does not replace

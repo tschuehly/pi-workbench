@@ -1,2 +1,5 @@
 # Synthetic value assigned only inside the child-bash spill-redaction test; not a provider credential.
 aa14261d9d6a8a656992799b9df56618d691bd82:packages/durable-pilot/test/child-deadlines.test.ts:generic-api-key:149
+# Synthetic private-key header lines in the owner-run redaction tests; no key material.
+extensions/background-bash/jobs.test.mjs:private-key:92
+extensions/background-bash/jobs.test.mjs:private-key:110

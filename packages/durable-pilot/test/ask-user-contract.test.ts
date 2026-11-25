@@ -3,12 +3,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { toQuestion, validateContext, validateQuestions } from "../src/workbench.ts";
+import { toQuestion, validateApproval, validateContext, validateQuestions } from "../src/workbench.ts";
 
 type Param = Parameters<typeof toQuestion>[0];
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/ask-user-contract.json", import.meta.url), "utf8")) as {
 	valid: { input: { context: string; questions: Param[] }; expected: { context: string; questions: unknown[] } };
 	invalid: { name: string; questions: Param[]; error: string }[];
+	approval: { accepted: [boolean | null, true | null][]; invalid: { value: unknown; error: string }; withoutQuestions: { name: string; questions: Param[]; expected: unknown[]; error: string } };
 };
 
 test("ask_user keeps every supported field and drops unknown ones, as PI WEB does", () => {
@@ -21,3 +22,14 @@ for (const { name, questions, error } of fixture.invalid) {
 		assert.throws(() => validateQuestions(questions.map(toQuestion)), { message: error });
 	});
 }
+
+test("ask_user keeps approval true, drops false, and rejects other values with PI WEB's message", () => {
+	for (const [given, kept] of fixture.approval.accepted) assert.equal(validateApproval(given ?? undefined), kept ?? undefined);
+	assert.throws(() => validateApproval(fixture.approval.invalid.value), { message: fixture.approval.invalid.error });
+});
+
+test(`ask_user accepts an ${fixture.approval.withoutQuestions.name} and rejects one without approval, as PI WEB does`, () => {
+	const { questions, expected, error } = fixture.approval.withoutQuestions;
+	assert.deepEqual(validateQuestions(questions.map(toQuestion), true), expected);
+	assert.throws(() => validateQuestions(questions.map(toQuestion)), { message: error });
+});

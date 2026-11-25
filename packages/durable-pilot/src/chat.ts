@@ -10,7 +10,6 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { getDocsPath, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
@@ -241,7 +240,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const extensions: Extension[] = [
 		chatTools(() => workbench.resources, options.cwd),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
-		workbenchExtensions(options.cwd),
+		workbenchExtensions(options.cwd, (path, cwd, conversationId) => bash.writeRefusal(path, cwd, conversationId)),
 		checkpointExtension(() => opened!.harness, { rootId: () => opened?.root.id, workstream: () => homeWorkstream(chatId) }),
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Same runner, blocking API and a bounded lifetime for children; no async child scheduler.
@@ -284,7 +283,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			const kind = (await target.read.snapshot(ChildDoc, target.conversationId, c))?.kind;
 			// The Chat's active branch is the Chat: its calls carry the Chat's own ID.
 			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }), ...(kind === undefined || kind === "lead" ? {} : { executionKind: kind }) };
-			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
+			// Its file writes run inside the write fence of its commands (background-bash.ts `env`).
+			return bash.env({ cwd, shellEnv: toolEnv(identity) }, target.conversationId);
 		},
 		// Package tools keep their own deferral (web_enable); tool groups also gate the package groups (monitor), as in
 		// legacy Chats. Their wraps apply to the package extension installed after them.
