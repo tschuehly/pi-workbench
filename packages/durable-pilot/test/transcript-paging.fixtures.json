@@ -657,5 +657,165 @@
   },
   "start": 10,
   "end": 30
+ },
+ {
+  "name": "a page of only results walks back across a notice to their call",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "customType": "notice",
+    "content": "cache miss",
+    "display": true
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 1,
+  "end": 23
+ },
+ {
+  "name": "a notice before leading tool results goes to the earlier page with them",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "customType": "notice",
+    "content": "cache miss",
+    "display": true
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "user",
+    "content": "next"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "done"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 7,
+   "limit": 5
+  },
+  "start": 5,
+  "end": 7
  }
 ]

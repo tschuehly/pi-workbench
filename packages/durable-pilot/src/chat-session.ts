@@ -221,20 +221,23 @@ export async function storedMessages(host: Pick<Host, "harness" | "root">): Prom
 
 /**
  * PI WEB's `pageMessagesAtSafeBoundary` (src/server/sessions/messagePaging.ts), kept identical (test/transcript-paging.fixtures.json):
- * a hard limit (default 20, at most 500) ending before `before`; the start moves forward past leading tool results so none
- * shows without its call, and a page of only results moves back to their call message, exceeding the limit just to reach it.
+ * a hard limit (default 20, at most 500) ending before `before`; the start moves forward past leading tool results (and
+ * notices before them) so none shows without its call, and a page of only those moves back to their call message, across
+ * notices between the call and its results, exceeding the limit just to reach it.
  */
 export function pageTranscript<T>(all: T[], page: TranscriptPage): { messages: T[]; start: number; total: number } {
 	const total = all.length;
 	const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
 	const isResult = (index: number) => (all[index] as { role?: unknown } | null)?.role === "toolResult";
+	const isNotice = (index: number) => (all[index] as { role?: unknown } | null)?.role === "custom";
 	const before = clamp(page.before ?? total, 0, total);
+	const orphan = (index: number) => { while (index < before && isNotice(index)) index += 1; return index < before && isResult(index); };
 	const requested = Math.max(0, before - clamp(page.limit ?? 20, 1, 500));
 	let start = requested;
-	while (start < before && isResult(start)) start += 1;
+	while (start < before && orphan(start)) start += 1;
 	if (start === before) {
 		start = requested;
-		while (start > 0 && isResult(start - 1)) start -= 1;
+		while (start > 0 && (isResult(start - 1) || isNotice(start - 1))) start -= 1;
 		start = Math.max(0, start - 1);
 	}
 	return { messages: all.slice(start, before), start, total };
