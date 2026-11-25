@@ -177,7 +177,13 @@ const IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 /** PI WEB's answer-image limits (its ask route and store), checked again here before a close commits. */
 const ANSWER_IMAGE_LIMIT = 16;
 const ANSWER_IMAGE_BYTES = 10 * 1024 * 1024;
-const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/** Non-empty canonical base64, as PI WEB's askUserImages.ts: whole quads, padding only at the end, zero padding bits ("AA==" yes, "AB==" no). */
+const canonicalBase64 = (data: string): boolean => {
+	if (data.length === 0 || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(data)) return false;
+	const pad = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return pad === 0 || (BASE64_ALPHABET.indexOf(data[data.length - pad - 1]!) & (pad === 2 ? 0b1111 : 0b11)) === 0;
+};
 
 /** A prompt's or answer's `images` as image blocks, or undefined when absent; anything else is refused. `answer`: also PI WEB's answer-image limits. */
 function imageBlocks(images: unknown, answer = false): { type: "image"; data: string; mimeType: string }[] | undefined {
@@ -187,7 +193,7 @@ function imageBlocks(images: unknown, answer = false): { type: "image"; data: st
 		if (images.length > ANSWER_IMAGE_LIMIT) throw new Error(`answers take at most ${ANSWER_IMAGE_LIMIT} images`);
 		images.forEach(({ data }: { data: string }, index) => {
 			const n = index + 1;
-			if (data.length % 4 !== 0 || !BASE64.test(data)) throw new Error(`image ${n} is not valid base64`);
+			if (!canonicalBase64(data)) throw new Error(`image ${n} is not valid base64`);
 			if ((data.length / 4) * 3 - (data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0) > ANSWER_IMAGE_BYTES) throw new Error(`image ${n} is larger than 10 MiB`);
 		});
 	}

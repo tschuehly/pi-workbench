@@ -674,6 +674,9 @@ test("ask_user images: closeAsk with images delivers the answers text plus the i
 	await assert.rejects(close("op-bad", [{ mimeType: "image/png" }]), /images must be image blocks/);
 	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "not base64" }]), /image 1 is not valid base64/);
 	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "iVBORw0" }]), /image 1 is not valid base64/, "a length that is no multiple of 4");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "" }]), /image 1 is not valid base64/, "empty data");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AB==" }]), /image 1 is not valid base64/, "'==' with nonzero padding bits");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AAB=" }]), /image 1 is not valid base64/, "'=' with nonzero padding bits");
 	await assert.rejects(close("op-bad", Array.from({ length: 17 }, () => ({ mimeType: "image/png", data: PNG }))), /at most 16 images/);
 	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "A".repeat(Math.ceil(10 * 1024 * 1024 / 3) * 4 + 4) }]), /image 1 is larger than 10 MiB/);
 	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.length, 1, "a refused close leaves the set open");
