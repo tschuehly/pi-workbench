@@ -74,6 +74,8 @@ if (socketPath !== undefined) {
 	// Only the owner may reach the host: its folder admits nobody else (the socket itself is 0600 too).
 	const folder = lstatSync(dirname(socketPath));
 	if (!folder.isDirectory() || folder.uid !== process.getuid?.() || (folder.mode & 0o077) !== 0) throw new Error(`--socket must be in an owner-only folder: ${dirname(socketPath)}`);
+	// Its methods run commands unfenced (`shell`, `ownerRun`): the write fence denies its jobs this folder (sandbox.mjs).
+	process.env.PI_DURABLE_HOST_SOCKET_DIR = dirname(socketPath);
 }
 /** The daemon connected over the socket, if any. */
 let peer: Socket | undefined;
@@ -323,7 +325,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 };
 
 /** Operations that must not overlap history navigation (legacy `assertTreeNavigationInactive`). */
-const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell"]);
+const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "resolveEffect", "compact", "command", "mutateQueue", "setThinkingLevel", "cycleThinkingLevel", "shell", "ownerRun"]);
 
 /** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
 async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {

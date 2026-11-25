@@ -348,21 +348,25 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   // A short socket path (the 104-byte limit): a stand-in PI WEB data folder in the system temp folder.
   const dataDir = mkdtempSync(join(tmpdir(), "pw-"));
   mkdirSync(join(dataDir, "hosts"));
+  // A host socket folder outside the data folder (PI_WEB_DURABLE_HOST_DIR), as the host announces it.
+  const hostDir = mkdtempSync(join(tmpdir(), "ph-"));
   const otherOps = join(userInfo().homedir, ".pi-workbench", "sandbox", "ops", `test-${process.pid}.sock`);
   mkdirSync(dirname(otherOps), { recursive: true });
   try {
     const web = await listen(0);
     await listen(join(dataDir, "hosts", "h.sock"));
     await listen(otherOps);
+    await listen(join(hostDir, "h.sock"));
     const free = await listen(0);
     const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
-    const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir } });
+    const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-U -w2 "${join(hostDir, "h.sock")}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir, PI_DURABLE_HOST_SOCKET_DIR: hostDir } });
     assert.equal(job.state, "complete", job.error);
-    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
   } finally {
     for (const server of servers) server.close();
     rmSync(otherOps, { force: true });
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(hostDir, { recursive: true, force: true });
   }
 });
 

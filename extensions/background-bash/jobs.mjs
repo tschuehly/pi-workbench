@@ -60,13 +60,15 @@ export function describeJob(job) {
 }
 
 /**
- * A finished job's completion message (not yet redacted): state, exit, log path and recent output, the last 20 lines
- * of a success and the whole retained tail otherwise, with truncation disclosed.
+ * A finished job's completion message (its header not yet redacted): state, exit, log path and recent output, the last
+ * 20 lines of a success and the whole retained tail otherwise, with truncation disclosed. The output is sanitized
+ * before lines are dropped, so a cut never separates a secret from the part the redactor recognizes it by.
  */
-export function completionContent(job) {
+export function completionContent(job, sanitize = redact) {
   const tail = readTail(job.logPath, job.bytes);
-  const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
-  return `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`;
+  const clean = sanitize(cleanOutput(tail));
+  const shown = job.exitCode === 0 ? clean.replace(/\n$/, "").split("\n").slice(-20).join("\n") : clean;
+  return `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${shown}`;
 }
 
 /** Redacted, control-free command, description and recent output for the Activity drawer. */
@@ -126,9 +128,9 @@ export function readJob(root, id) {
   let result = readJson(join(dir, "exit"));
   const claim = readJson(join(dir, "claim"));
   if (result === undefined && claim === undefined) {
-    if (!record.owned || Date.now() < record.expiresAt) return { ...job, state: "pending" };
+    if (Date.now() < record.expiresAt) return { ...job, state: "pending" };
     // The launching host may have died before observing a pre-claim runner failure. Its committed expiry still wins.
-    writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), cleanup: { survivors: [] } }));
+    writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout ?? Math.round((record.expiresAt - record.startedAt) / 1000)} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), ...(record.owned ? { cleanup: { survivors: [] } } : {}) }));
     result = readJson(join(dir, "exit"));
   }
   if (result === undefined && !ownsProcess({ id, pgid: claim?.pid })) {

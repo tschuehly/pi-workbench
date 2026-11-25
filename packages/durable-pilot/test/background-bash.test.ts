@@ -5,7 +5,7 @@
 // reattaches to the live runner, a machine restart (runner gone) reports an unknown exit and never reruns.
 import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -99,6 +99,21 @@ test("an owner run is an unfenced background job of the lead: launched once per 
 	const [completion, ...more] = await completions(host);
 	assert.equal(more.length, 0);
 	assert.match(textOf(completion!.content), new RegExp(`^\\[Owner run result\\] .*untrusted data.*\\nBackground bash ${started.jobId} failed \\(exit 7\\)\\.\\nFull output: .*\\n${cwd}\\n$`, "s"));
+	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
+test("an owner run masks a private key that never ends, and once its job record is pruned the same operation is refused, not run again", async () => {
+	const { store, cwd } = family("owner-run-pruned");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:pruned", command: `echo x >> launches.log; printf -- '-----BEGIN PRIVATE KEY-----\\nKEYBODY${"A".repeat(60)}\\n'`, cwd };
+	const started = await host.call<{ jobId: string }>("ownerRun", request);
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion");
+	const [completion] = await completions(host);
+	assert.doesNotMatch(textOf(completion!.content), /KEYBODY/);
+	rmSync(join(JOBS, started.jobId), { recursive: true }); // the registry's weekly prune
+	await assert.rejects(host.call("ownerRun", request), /already ran/);
 	assert.equal(launches(cwd), 1, "ran once");
 	await host.close();
 });

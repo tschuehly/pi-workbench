@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
-import { createBackgroundBashJobs } from "./jobs.mjs";
+import { completionContent, createBackgroundBashJobs, launchJob, readJob } from "./jobs.mjs";
+import { redact } from "../secret-redaction/redact.mjs";
 // Fenced commands write only in granted folders, never system temp: a test-owned PI_TMP under ~/.pi-workbench/tmp.
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
 mkdirSync(base, { recursive: true });
@@ -82,6 +83,31 @@ test("successful completions send only the last 20 lines while failures retain t
   assert.match(success, /Full output: .*output\.log/);
   assert.match(messages.find((m) => /exit 2/.test(m.message.content)).message.content, /line 0\n/);
   jobs.shutdown();
+});
+
+test("a success's 20-line cut never shows the body of a private key whose header it dropped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-key-"));
+  const logPath = join(dir, "output.log");
+  const body = Array.from({ length: 25 }, (_, i) => `KEYBODY${String(i).padStart(2, "0")}${"A".repeat(56)}`);
+  writeFileSync(logPath, ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", "done", ""].join("\n"));
+  const content = redact(completionContent({ id: "k", state: "complete", exitCode: 0, logPath, bytes: statSync(logPath).size }));
+  assert.doesNotMatch(content, /KEYBODY/);
+  assert.match(content, /done$/);
+});
+
+test("a lead job never starts past its deadline, and an unclaimed one settles there", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-late-"));
+  const marker = join(root, "ran");
+  const now = Date.now();
+  launchJob({ root, id: "late", command: `touch ${marker}`, cwd, env: process.env, sessionId: "s1", startedAt: now - 2000, expiresAt: now - 1000 });
+  await until(() => existsSync(join(root, "late", "exit")));
+  assert.equal(existsSync(marker), false, "the command never ran");
+  assert.match(readJob(root, "late").error, /before launch/);
+  mkdirSync(join(root, "unclaimed"));
+  writeFileSync(join(root, "unclaimed", "job.json"), JSON.stringify({ id: "unclaimed", command: "x", cwd, sessionId: "s1", startedAt: now - 2000, expiresAt: now - 1000 }));
+  const job = readJob(root, "unclaimed");
+  assert.equal(job.state, "failed");
+  assert.match(job.error, /Timed out after 1 seconds before launch/);
 });
 
 test("registry files are private", async () => {
