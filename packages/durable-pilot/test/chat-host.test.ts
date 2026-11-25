@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
-import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
+import { ChatSession, pageTranscript, piWebChatTitle } from "../src/chat-session.ts";
 import { context } from "../src/host.ts";
 import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
@@ -181,7 +181,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
-	assert.deepEqual(await host.call("transcript", { limit: 1 }), { ...transcript, start: 0, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a page from the turn's user message");
+	assert.deepEqual(await host.call("transcript", { limit: 1 }), { ...transcript, messages: transcript.messages.slice(-1), start: 3, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a hard-limited page");
 	await assert.rejects(host.call("transcript", { limit: -1 }), /non-negative integers/);
 	// Every turn request asks for the long prompt-cache tier.
 	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
@@ -540,6 +540,35 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 });
 
 /** An in-process Chat on the faux model (no real battery alarm), with its run count and an event-driven wait. */
+test("pageTranscript matches PI WEB's pageMessagesAtSafeBoundary: a hard limit that skips leading tool results; a 1,700-message turn chains back exactly once", () => {
+	const user = (content: string) => ({ role: "user", content });
+	const assistantText = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+	const thinking = (text: string) => ({ role: "assistant", content: [{ type: "thinking", thinking: text }] });
+	const toolCall = (name: string) => ({ role: "assistant", content: [{ type: "toolCall", name }] });
+	const toolResult = (text: string) => ({ role: "toolResult", content: text });
+	const page = (start: number, total: number, messages: unknown[]) => ({ start, total, messages });
+	const turn = [user("a"), assistantText("b"), user("c")];
+	assert.deepEqual(pageTranscript(turn, { limit: 1 }), page(2, 3, turn.slice(2)));
+	const midTurn = [user("prompt"), thinking("plan"), toolCall("read"), toolResult("ok"), thinking("next"), assistantText("answer")];
+	assert.deepEqual(pageTranscript(midTurn, { before: 5, limit: 2 }), page(4, 6, midTurn.slice(4, 5)));
+	const results = [user("prompt"), toolCall("read"), toolResult("a"), toolResult("b"), assistantText("answer")];
+	assert.deepEqual(pageTranscript(results, { limit: 3 }), page(4, 5, results.slice(4)));
+	assert.deepEqual(pageTranscript(results, { before: 4, limit: 3 }), page(1, 5, results.slice(1, 4)));
+	const messages: unknown[] = [user("prompt")];
+	while (messages.length < 1_700) messages.push(...(messages.length % 3 === 1 ? [toolCall("read")] : messages.length % 3 === 2 ? [toolResult("ok")] : [thinking("next")]));
+	assert.equal(pageTranscript(messages, {}).messages.length, 20, "20 by default");
+	const seen: unknown[] = [];
+	let before: number | undefined;
+	for (let guard = 0; guard < 1_700; guard += 1) {
+		const result = pageTranscript(messages, { ...(before === undefined ? {} : { before }), limit: 20 });
+		assert.ok(result.messages.length > 0 && result.messages.length <= 20);
+		seen.unshift(...result.messages);
+		if (result.start === 0) break;
+		before = result.start;
+	}
+	assert.deepEqual(seen, messages);
+});
+
 async function quietChat(label: string) {
 	const { store, cwd } = family(label);
 	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: `chat-${label}` });
@@ -559,7 +588,7 @@ async function quietChat(label: string) {
 	return { h, store, session, runs, settled };
 }
 
-test("a paged transcript holds only its page from a user message on; chained earlier pages cover it exactly once; the partial matches a whole read", async () => {
+test("a paged transcript holds only its page, within the limit; chained earlier pages cover it exactly once; the partial matches a whole read", async () => {
 	const { session, settled } = await quietChat("paging");
 	type Page = { messages: { role: string; entryId?: string; usage?: unknown; content?: unknown }[]; start: number; total: number; usage: { entryId?: string; usage?: unknown; content?: unknown }[]; partial: unknown };
 	const read = (page?: { before?: number; limit?: number }) => session.transcript(page) as Promise<Page>;
@@ -572,12 +601,13 @@ test("a paged transcript holds only its page from a user message on; chained ear
 		const whole = (await session.transcript()).messages as Page["messages"];
 		const last = await read({ limit: 3 });
 		assert.equal(last.total, whole.length);
-		assert.deepEqual(last.messages, whole.slice(-4), "back to the last turn's user message (a bash turn has 4 messages)");
-		assert.equal(last.start, whole.length - 4);
+		assert.deepEqual(last.messages, whole.slice(-3), "a hard limit, not back to the turn's user message");
+		assert.equal(last.start, whole.length - 3);
 		const pages = [last.messages];
 		for (let start = last.start; start > 0;) {
 			const earlier = await read({ before: start, limit: 3 });
-			assert.equal(earlier.messages[0]!.role, "user");
+			assert.ok(earlier.messages.length > 0 && earlier.messages.length <= 3);
+			assert.notEqual(earlier.messages[0]!.role, "toolResult", "no result without its call");
 			pages.unshift(earlier.messages);
 			start = earlier.start;
 		}

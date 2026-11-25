@@ -219,6 +219,21 @@ export async function storedMessages(host: Pick<Host, "harness" | "root">): Prom
 	return (await history(host.root, view.entries.at(-1)?.id ?? view.before ?? 0)).flatMap((entry) => browserMessages(entry));
 }
 
+/**
+ * PI WEB's `pageMessagesAtSafeBoundary` (src/server/sessions/messagePaging.ts), kept identical: a hard limit (default 20, at
+ * most 500) ending before `before`; the start moves forward past leading tool results so none shows without its call.
+ */
+export function pageTranscript<T>(all: T[], page: TranscriptPage): { messages: T[]; start: number; total: number } {
+	const total = all.length;
+	const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
+	const before = clamp(page.before ?? total, 0, total);
+	const requested = Math.max(0, before - clamp(page.limit ?? 20, 1, 500));
+	let start = requested;
+	while (start < before && (all[start] as { role?: unknown } | null)?.role === "toolResult") start += 1;
+	if (start === before) start = requested;
+	return { messages: all.slice(start, before), start, total };
+}
+
 /** What PI WEB's cache-miss scan reads (`cacheScanEntries`): assistant usage fields and context resets. */
 function usageOnly(value: unknown): unknown[] {
 	const message = value as Record<string, unknown>;
@@ -708,19 +723,14 @@ export class ChatSession {
 		return this.#partial === undefined ? null : { ...this.#partial, streamId: this.#streamId };
 	}
 
-	/** The whole transcript, or with `page` only that page (PI WEB `pageMessagesAtSafeBoundary`: 100 by default, at most 500). */
+	/** The whole transcript, or with `page` only that page (`pageTranscript`). */
 	async transcript(page?: TranscriptPage): Promise<Transcript> {
 		// Captured before the await, so the page and partial match the events emitted so far.
-		// shortcut: flattens every entry in memory to count and scan; only the page crosses the socket.
+		// shortcut: flattens every entry in memory (the total and the usage scan need all of them); only the page crosses the socket. Walk #entries from the end with a cached count if reads get slow.
 		const all = this.messages();
 		const partial = this.partial();
 		if (page === undefined) return { messages: all, partial, status: await this.status() };
-		const total = all.length;
-		const before = Math.min(page.before ?? total, total);
-		let start = Math.max(0, before - Math.min(Math.max(page.limit ?? 100, 1), 500));
-		// Back to a user message, so a page never starts mid-turn.
-		while (start > 0 && (all[start] as { role?: string }).role !== "user") start -= 1;
-		return { messages: all.slice(start, before), start, total, usage: all.flatMap(usageOnly), partial, status: await this.status() };
+		return { ...pageTranscript(all, page), usage: all.flatMap(usageOnly), partial, status: await this.status() };
 	}
 
 	async status(): Promise<ChatStatus> {
