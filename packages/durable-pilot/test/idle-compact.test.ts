@@ -41,14 +41,11 @@ test("the timer fires a minute before the cache entry expires, counted from the 
 	assert.equal(delay(model(tiers), []), undefined, "no request");
 });
 
-test("an uncached request arms nothing; Codex gets its measured 30 min only for Sol, Terra and Astra", () => {
+test("an uncached request arms nothing; Codex Chats never arm (their cache outlives the timer)", () => {
 	assert.equal(delay(model(tiers), [usage(0, 0, 0)]), undefined, "neither read nor write: nothing cached to keep");
-	const codex = (id: string) => model(undefined, { provider: "openai-codex", id });
-	for (const id of ["gpt-6.2-sol", "gpt-5.6-terra", "gpt-6.2-astra"]) assert.equal(delay(codex(id), [usage(50_000, 0)]), 29 * 60_000, id);
-	for (const id of ["gpt-6-luna", "gpt-6-mini", "codex-other"]) assert.equal(delay(codex(id), [usage(50_000, 0)]), undefined, `${id}: unknown TTL`);
-	assert.equal(delay(codex("gpt-6.2-sol"), [usage(0, 0)]), undefined, "Codex, uncached");
-	// The ChatGPT sign-in can also be the `openai` provider (this Mac's only Codex login).
-	assert.equal(delay(model(undefined, { provider: "openai", id: "gpt-6.2-sol" }), [usage(50_000, 0)]), 29 * 60_000, "openai Sol");
+	// The ChatGPT sign-in can be the `openai-codex` or the `openai` provider (this Mac's only Codex login).
+	for (const provider of ["openai-codex", "openai"]) for (const id of ["gpt-6.2-sol", "gpt-5.6-terra", "gpt-6.2-astra", "gpt-6-luna"])
+		assert.equal(delay(model(undefined, { provider, id }), [usage(50_000, 0)]), undefined, `${provider}/${id}`);
 });
 
 async function workstream(id: string, sessions: string[]) {

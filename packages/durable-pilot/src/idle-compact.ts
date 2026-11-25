@@ -51,8 +51,9 @@ const SUMMARY_SYSTEM = "You are a context summarization assistant. Read the conv
 
 const MIN_PROMPT_TOKENS = 80_000;
 export const LEAD_MS = 60_000;
-// shortcut: Codex backend has no documented TTL; ~30 min measured for Sol/Terra/Astra (github.com/volt-hq/Volt/issues/458), others unknown so skipped; replace if pi-ai ships Codex promptCache.
-const CODEX_TTL_MS = 30 * 60_000;
+// Decision (owner, 2026-11-25): no timer on Codex Chats (pi-ai gives them no TTL): the subscription's default cache held
+// past 71 min idle with no write charge, so compacting at ~29 min trades detail for nothing. Undo: when the TTL is
+// undefined, use 30 * 60_000 for openai-codex/openai Sol, Terra and Astra (github.com/volt-hq/Volt/issues/458).
 const TEXT_LIMIT = 4_000;
 const NONE = "Unknown: this session has no earlier checkpoint; read the idle note.";
 
@@ -69,8 +70,7 @@ export function idleDelayMs(model: Model<Api> | undefined, usages: readonly Usag
 	const write = last.cacheWrite > 0 ? last : earlier.find((usage) => usage.cacheWrite > 0);
 	const granted = (write?.cacheWrite1h ?? 0) > 0;
 	const long = model.promptCache?.long !== undefined && !deniedByCompat && granted;
-	let ttl = getPromptCacheTtlMs(model, { cacheRetention: long ? CACHE_RETENTION : "short" });
-	if (ttl === undefined && (model.provider === "openai-codex" || model.provider === "openai") && /sol|terra|astra/.test(model.id)) ttl = CODEX_TTL_MS;
+	const ttl = getPromptCacheTtlMs(model, { cacheRetention: long ? CACHE_RETENTION : "short" });
 	return ttl === undefined ? undefined : Math.max(0, ttl - LEAD_MS);
 }
 
