@@ -181,6 +181,9 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
+	// Every turn request asks for the long prompt-cache tier.
+	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
+	assert.deepEqual(retention, ["long", "long"]);
 	await host.close();
 	assert.equal(integrity(store), "ok");
 });
