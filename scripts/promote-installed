@@ -22,6 +22,13 @@
 #       kills them. --force (first argument) skips that check.
 #       One promotion at a time: switch, switch-workbench and switch-web refuse (exit 6) while another holds the lock
 #       <store>/promote.lock (a switch holds it until its job ends); a lock whose holder is gone is taken over.
+#   promote-installed latest [--dry-run] [--json]
+#       Show the installed pair, the latest pair (origin/main of $PROJECTS/pi-workbench after a fetch, else local main;
+#       PI WEB at that commit's pi-web.rev, else origin/pi-workbench) and the first-parent commits between them.
+#       --json prints {installed:{workbench,piWeb}, latest:{workbench,piWeb}, merges:[{repo,sha,subject}], upToDate}
+#       with full revisions (PI WEB's Install latest button reads it). Changes nothing.
+#   promote-installed latest --from <live-workbench-rev> <live-pi-web-rev> [delay-seconds]
+#       switch to the latest pair, with switch's lock, stale check and exit codes; exit 0 without a switch when up to date.
 #   promote-installed switch-workbench <workbench-rev>
 #       Prepare, then atomically repoint only ~/IdeaProjects/pi-workbench.durable-installed. The running daemon keeps
 #       the Durable host it started with until the next switch. Roll back by switching to the previous revision,
@@ -275,8 +282,48 @@ lock() { # one promotion at a time, released on exit; a switch hands it to its j
   trap 'unlock "pid $$"' EXIT
 }
 
-case ${1:-} in prepare|switch|switch-workbench|switch-web|current|prune|check-idle|check-hosts|sessiond-unchanged|--force) ;;
-  *) echo "promote-installed supports prepare, switch, switch-workbench, switch-web, current, prune, check-idle, check-hosts" >&2; exit 2;; esac
+full() { # <product> <12-character rev or none>: the full revision when its integration checkout knows it
+  [[ $2 == none ]] && { echo none; return; }
+  git -C "$PROJECTS/$1" rev-parse --verify --quiet "$2^{commit}" 2>/dev/null || echo "$2"
+}
+latest_pair() { # sets LATEST_WB and LATEST_PW, full revisions of the latest pair
+  local wbr=$PROJECTS/pi-workbench pwr=$PROJECTS/pi-web pin
+  git -C "$pwr" fetch --quiet origin 2>/dev/null || echo "note: fetching $pwr failed; using its last fetched origin/pi-workbench" >&2
+  if git -C "$wbr" fetch --quiet origin 2>/dev/null && LATEST_WB=$(git -C "$wbr" rev-parse --verify --quiet 'origin/main^{commit}'); then :
+  else
+    LATEST_WB=$(git -C "$wbr" rev-parse --verify --quiet 'main^{commit}') || { echo "no main in $wbr" >&2; return 1; }
+    echo "note: fetching origin/main of $wbr failed; using local main ${LATEST_WB:0:12}" >&2
+  fi
+  if pin=$(git -C "$wbr" show "$LATEST_WB:pi-web.rev" 2>/dev/null); then
+    LATEST_PW=$(tr -d '[:space:]' <<<"$pin"); [[ $LATEST_PW =~ ^[0-9a-f]{40}$ ]] || { echo "pi-web.rev at $LATEST_WB is not a full commit" >&2; return 1; }
+  else LATEST_PW=$(git -C "$pwr" rev-parse --verify --quiet 'origin/pi-workbench^{commit}') || { echo "no pi-web.rev at $LATEST_WB and no origin/pi-workbench in $pwr" >&2; return 1; }; fi
+}
+merges() { # <product> <installed> <latest>: TAB lines product, sha, subject of the first-parent commits installed..latest
+  # shortcut: nothing installed yet lists no merges (all of history is no news), say so when the button needs it.
+  [[ $2 == none ]] && return 0
+  git -C "$PROJECTS/$1" log --first-parent --format="$1%x09%H%x09%s" "$2..$3" 2>/dev/null || echo "note: cannot list $1 commits $2..$3" >&2
+}
+preview() { # <json 0|1>: the installed and latest pair and what lies between (PI WEB Install latest reads the JSON)
+  local iwb ipw
+  iwb=$(full pi-workbench "$(live pi-workbench)") ipw=$(full pi-web "$(live pi-web)")
+  { merges pi-workbench "$iwb" "$LATEST_WB"; merges pi-web "$ipw" "$LATEST_PW"; } | node -e '
+    const [json, me, workbench, piWeb, lwb, lpw] = process.argv.slice(1); let d = "";
+    process.stdin.on("data", (c) => d += c).on("end", () => {
+      const merges = d.split("\n").filter(Boolean).map((l) => { const [repo, sha, ...s] = l.split("\t"); return { repo, sha, subject: s.join("\t") }; });
+      const out = { installed: { workbench, piWeb }, latest: { workbench: lwb, piWeb: lpw }, merges, upToDate: workbench === lwb && piWeb === lpw };
+      if (json === "1") return console.log(JSON.stringify(out));
+      const s = (r) => r.slice(0, 12);
+      console.log(`installed  pi-workbench ${s(workbench)}  pi-web ${s(piWeb)}`);
+      console.log(`latest     pi-workbench ${s(lwb)}  pi-web ${s(lpw)}`);
+      if (out.upToDate) return console.log("up to date");
+      console.log(`${merges.length} commits to install:`);
+      for (const m of merges) console.log(`  ${m.repo.padEnd(12)} ${s(m.sha)} ${m.subject}`);
+      console.log(`install with the owner'\''s go-ahead: ${me} latest --from ${s(workbench)} ${s(piWeb)}`);
+    })' "$1" "$ME" "$iwb" "$ipw" "$LATEST_WB" "$LATEST_PW"
+}
+
+case ${1:-} in prepare|switch|switch-workbench|switch-web|latest|current|prune|check-idle|check-hosts|sessiond-unchanged|--force) ;;
+  *) echo "promote-installed supports prepare, switch, switch-workbench, switch-web, latest, current, prune, check-idle, check-hosts" >&2; exit 2;; esac
 
 force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == current ]] && { echo "$(live pi-workbench) $(live pi-web)"; exit 0; }
@@ -327,6 +374,23 @@ if [[ ${1:-} == switch-workbench && $# -eq 2 ]]; then
   prune_builds --apply || true
   exit 0
 fi
+LATEST=
+if [[ ${1:-} == latest ]]; then
+  shift; json=0 dry=0 from=() ldelay=()
+  while (( $# )); do
+    case $1 in
+      --json) json=1;; --dry-run) dry=1;;
+      --from) [[ $# -ge 3 ]] || { echo "latest --from needs the installed pair: $ME latest --from <live-workbench-rev> <live-pi-web-rev> [delay]" >&2; exit 2; }
+        from=("$2" "$3"); shift 2;;
+      *) [[ ${#from[@]} == 2 && $1 =~ ^[0-9]+$ ]] || { echo "usage: $ME latest [--dry-run] [--json] | latest --from <live-workbench-rev> <live-pi-web-rev> [delay]" >&2; exit 2; }
+        ldelay=("$1");;
+    esac; shift
+  done
+  latest_pair || exit 1
+  if [[ $dry == 1 || ${#from[@]} == 0 ]]; then preview "$json"; exit $?; fi
+  LATEST=1
+  set -- switch "$LATEST_WB" "$LATEST_PW" --from "${from[@]}" ${ldelay[@]+"${ldelay[@]}"}
+fi
 [[ $# -ge 3 && ($1 == prepare || $1 == switch) ]] || { sed -n '/^set -E/q;2,$p' "$0"; exit 2; }
 delay=3
 if [[ $1 == switch ]]; then
@@ -342,6 +406,7 @@ if [[ $1 == switch ]]; then
     echo "owner the live pair and ask for a fresh approval before proposing a switch --from $lwb $lpw." >&2
     exit 8
   fi
+  if [[ -n $LATEST ]] && matches "$lwb" "$2" && matches "$lpw" "$3"; then echo "up to date: $lwb $lpw is the latest pair; nothing to switch"; exit 0; fi
 fi
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"

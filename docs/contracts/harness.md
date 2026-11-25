@@ -79,8 +79,10 @@ Every later `promote-installed` switch keeps the extra keys of the current plist
 and merges its own `PI_PROMOTE_DURABLE_ENV` over them; `-KEY` in it removes a key. Chats already open keep their
 host's old environment until **Upgrade host**; restarting the daemon alone does not change it.
 
-`promote-installed` supports `prepare`, `switch`, `switch-workbench`, `switch-web`, `current`, `prune`, `check-idle`,
-`check-hosts` and `sessiond-unchanged` (`docs/plans/pi-durable-cutover-spec.md`, B7). The services run with
+`promote-installed` supports `prepare`, `switch`, `switch-workbench`, `switch-web`, `latest`, `current`, `prune`, `check-idle`,
+`check-hosts` and `sessiond-unchanged` (`docs/plans/pi-durable-cutover-spec.md`, B7). `latest --dry-run --json` prints the
+installed pair, the latest pair (origin/main of the integration pi-workbench checkout and its `pi-web.rev`) and the
+first-parent commits between them, for PI WEB's Install latest button; `latest --from <live pair>` switches to it like `switch`. The services run with
 `PI_WEB_PI_PACKAGE_AUTO_INSTALL=0`, `PI_WEB_DURABLE_DEFAULT=1`, `PI_WEB_DURABLE_AUTO_UPGRADE=1` and the
 build's own Durable host. `promote-installed` writes its own plists and never changes `~/.pi/agent`.
 
