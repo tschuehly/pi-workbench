@@ -87,6 +87,22 @@ test("P078/P081 bash runs in the background by default: a job ID returns at once
 	await host.close();
 });
 
+test("an owner run is an unfenced background job of the lead: launched once per operation, its completion wakes the idle Chat with the run marked", async () => {
+	const { store, cwd } = family("owner-run");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	const request = { operationId: "owner-run:1", command: "echo x >> launches.log; pwd; exit 7", cwd };
+	const started = await host.call<{ jobId: string; logPath: string }>("ownerRun", request);
+	assert.equal((await host.call<{ jobId: string }>("ownerRun", request)).jobId, started.jobId, "a retried request names the same job");
+	assert.equal(JSON.parse(readFileSync(join(JOBS, started.jobId, "job.json"), "utf8")).fullAccess, true, "outside the write fence");
+	await host.until(() => logged(store).some((l) => l.label.startsWith("[Owner run result]")), "the completion waking the Chat");
+	const [completion, ...more] = await completions(host);
+	assert.equal(more.length, 0);
+	assert.match(textOf(completion!.content), new RegExp(`^\\[Owner run result\\] .*untrusted data.*\\nBackground bash ${started.jobId} failed \\(exit 7\\)\\.\\nFull output: .*\\n${cwd}\\n$`, "s"));
+	assert.equal(launches(cwd), 1, "ran once");
+	await host.close();
+});
+
 test("a completion queued behind a busy turn stays out of the owner's queue, and the owner's queued message stays editable", async () => {
 	const { store, cwd } = family("queued-notice");
 	const host = new ChatHost(store, cwd);

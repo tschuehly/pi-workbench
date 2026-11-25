@@ -303,6 +303,8 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	setThinkingLevel: (params) => session.setThinkingLevel(text(params, "level")),
 	cycleThinkingLevel: () => session.cycleThinkingLevel(),
 	shell: (params) => session.shell(text(params, "text")),
+	// PI WEB's Run button, after the owner confirmed the command: an unfenced background job; `operationId` makes it idempotent.
+	ownerRun: (params) => session.ownerRun({ operationId: text(params, "operationId"), command: text(params, "command"), cwd: text(params, "cwd") }),
 	clearQueue: () => session.clearQueue(),
 	// History navigation: the tree of retained branches, and continuing from an earlier entry.
 	tree: () => session.tree(),

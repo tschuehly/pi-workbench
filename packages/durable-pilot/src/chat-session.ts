@@ -102,7 +102,7 @@ export const PROTOCOL = 2;
  * implements it. Protocol 2 hosts without the list support none of them. compact: `/compact` (method `compact`);
  * compact-and-continue: the model tool; tool-groups: `tools_enable`; tree: `/tree` and `navigate` (no branch summaries).
  */
-export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "ask-images"] as const;
+export const CAPABILITIES = ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "ask-images", "owner-run"] as const;
 
 /** A `!`/`!!` command's record: PI WEB's `bashExecution` message without role and timestamp. */
 export const BASH_ENTRY = "workbench.bash";
@@ -800,6 +800,14 @@ export class ChatSession {
 		const result = await packages.command(args === "" ? `/${name}` : `/${name} ${args}`);
 		await this.#publishStatus();
 		return result;
+	}
+
+	/** PI WEB's Run button: the owner's confirmed command as an unfenced background job of the lead (background-bash.ts). */
+	async ownerRun(request: { operationId: string; command: string; cwd: string }): Promise<{ jobId: string; logPath: string }> {
+		if (this.#chat?.bash === undefined) throw new Error("Run buttons need the Chat's background jobs");
+		const started = await this.#chat.bash.ownerRun(request);
+		await this.#publishStatus();
+		return started;
 	}
 
 	/**
