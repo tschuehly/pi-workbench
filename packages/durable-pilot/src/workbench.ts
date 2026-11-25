@@ -147,15 +147,16 @@ export async function resetMode(conversation: Conversation): Promise<void> {
 }
 
 /** `/mode <axis> <value>`: change the selection for the next prompt; a usage message for invalid arguments. */
-export async function selectMode(conversation: Conversation, args: string): Promise<{ ok: boolean; message: string }> {
+export async function selectMode(conversation: Conversation, args: string): Promise<{ ok: true } | { ok: false; message: string }> {
 	return conversation.commit(async (tx) => {
 		const doc = await tx.doc(WorkingModeDoc, conversation.id);
 		const next = selectFromArgs(doc.selected, doc.aligned, args);
-		if (next === undefined) return { ok: false, message: usage };
+		if (next === undefined) return { ok: false as const, message: usage };
 		doc.selected = next.selection;
 		doc.aligned = next.aligned;
 		doc.phase = "selected";
-		return { ok: true, message: "Working Mode applies with the next prompt." };
+		// No confirmation line: each icon click would add one to the Chat; the control's pending dot shows it.
+		return { ok: true as const };
 	}, context);
 }
 

@@ -410,7 +410,7 @@ test("Working Mode: a selection survives a restart, rides with the next prompt o
 	const { store, cwd } = family("mode");
 	let host = new ChatHost(store, cwd);
 	await host.ready;
-	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done", message: "Working Mode applies with the next prompt." });
+	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done" });
 	assert.equal((await host.call<{ type: string }>("mode", { args: "attention sideways" })).type, "unsupported");
 	assert.equal(mode(await host.call<Status>("status")).selected.attention, "Focused");
 	await host.close();
