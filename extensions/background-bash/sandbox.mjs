@@ -376,6 +376,8 @@ export function toolPath(p, { cwd, env }) {
 
 // Fixed: the paths are its arguments, never script text. Makes the parent folders, then writes stdin to the file.
 const WRITE_SCRIPT = '/bin/mkdir -p -- "$1" && exec /bin/cat > "$2"';
+// Makes the parent folders, then the new private folder itself (fails if anything is there).
+const MKDIR_SCRIPT = '/bin/mkdir -p -- "$1" && exec /bin/mkdir -m 700 -- "$2"';
 
 /** A proven sandbox-exec, or a throw: nothing runs without one. */
 function sandboxBin(env, home, what) {
@@ -391,17 +393,23 @@ function sandboxBin(env, home, what) {
  * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
  * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
  * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
- * after the tool's approval (`writeRefusal`) leads nowhere. `also`: one more write folder for this write only (a temp
- * folder the Chat's environment made). Throws when the fence refuses or no sandbox is proven, with `code` as Node's fs
- * errors carry it.
+ * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven, with
+ * `code` as Node's fs errors carry it.
  */
-export async function fencedWrite(path, content, { cwd, sessionId, env, signal, also }) {
+export const fencedWrite = (path, content, at) => fencedHelper(WRITE_SCRIPT, path, content, at);
+
+/**
+ * Makes the new folder `path` (and its parents) as `fencedWrite` writes a file: a temp folder of the Chat's environment
+ * (codemode's output files) inside its commands' grants, so a parent a job redirected leads nowhere.
+ */
+export const fencedMkdir = (path, at) => fencedHelper(MKDIR_SCRIPT, path, "", at);
+
+async function fencedHelper(script, path, content, { cwd, sessionId, env, signal }) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "nothing was written");
   const rules = await writeGrants({ cwd, sessionId, env });
   if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
-  const write = typeof also === "string" && also !== "" ? [...rules.write, also] : rules.write;
-  const args = sandboxArgs({ ...rules, write, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
+  const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", script, "sh", dirname(path), path]);
   const { code, stderr } = await new Promise((done) => {
     // A fixed environment: nothing of the tool's (BASH_ENV, ENV) reaches the shell.
     const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"], ...(signal ? { signal } : {}) });
