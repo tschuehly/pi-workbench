@@ -697,13 +697,15 @@ export async function closeAsk(conversation: Conversation, request: CloseAsk, re
 }
 
 type AnswerRecord = { question: { id: string }; answered: boolean; skipped?: boolean };
+/** PI WEB `AskUserOutcomeImage`: an attached image's metadata (its bytes are in that send's answers entry). */
+type RecordImage = JsonObject & { target: { kind: string; id?: string } };
 /** PI WEB's ASK_USER_RECORD_QUESTION_LIMIT: the most question records one record carries. */
 const RECORD_MAX = 100;
 
 /**
  * PI WEB `withEarlierAnswers` (pendingAskStore.ts), which builds the submitting browser's record from the same inputs: a
  * final close's record with the questions its earlier one-by-one sends closed, in `order`, counts and summary over all of
- * them; the user's last edit still labels the context while `contextEdited`. Undefined when there were no earlier sends.
+ * them, and every send's image metadata; the user's last edit still labels the context while `contextEdited`. Undefined when there were no earlier sends.
  */
 export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order: readonly string[], contextEdited: boolean): Outcome | undefined {
 	const all = earlier.flatMap((each) => each.questions as unknown as AnswerRecord[]);
@@ -720,11 +722,15 @@ export function wholeRecord(outcome: Outcome, earlier: readonly Outcome[], order
 	const skippedIds = skipped(questions).map((record) => record.question.id);
 	const lastEdit = [...earlier].reverse().find((each) => each.editedContext !== undefined)?.editedContext;
 	const editedContext = outcome.editedContext ?? (contextEdited ? lastEdit : undefined);
+	// Each earlier send's images keep its revision, since `[PIC_n]` restarts per send and its bytes are in that send's entry.
+	const shown = new Set(questions.map((record) => record.question.id));
+	const sentImages = (each: Outcome, revision?: unknown) => ((each.images ?? []) as RecordImage[]).map((image) => (typeof revision === "string" ? { ...image, revision } : image));
+	const images = [...earlier.flatMap((each) => sentImages(each, each.revision)), ...sentImages(outcome)].filter((image) => image.target.kind === "note" || shown.has(String(image.target.id)));
 	const summary = `Answered ${String(answered(questions) + answered(hidden))} of ${String(questions.length + hidden.length - skippedIds.length - skipped(hidden).length)}; `
 		+ (unansweredIds.length === 0 ? "none left unanswered" : `unanswered: ${unansweredIds.join(", ")}`)
 		+ (skippedIds.length === 0 ? "" : `; skipped (condition not met): ${skippedIds.join(", ")}`)
 		+ (hidden.length === 0 ? "" : `; ${String(hidden.length)} earlier ${hidden.length === 1 ? "answer" : "answers"} not shown`);
-	return { ...outcome, ...(editedContext === undefined ? {} : { editedContext }), questions: questions as unknown as JsonObject[], answeredCount: answered(questions), unansweredIds, summary };
+	return { ...outcome, ...(editedContext === undefined ? {} : { editedContext }), ...(images.length === 0 ? {} : { images }), questions: questions as unknown as JsonObject[], answeredCount: answered(questions), unansweredIds, summary };
 }
 
 export async function questionsState(harness: Harness, conversation: Conversation): Promise<QuestionsState> {

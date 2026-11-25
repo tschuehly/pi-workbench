@@ -814,6 +814,25 @@ test("ask_user: the set tracks who supplied its context; the user's edit, kept b
 	}
 });
 
+test("wholeRecord: each one-by-one send's image metadata stays in the whole record under its own answer, tagged with that send's revision; a hidden answer's images drop out", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string) => ({ question: { id, question: `${id}?`, options: [] }, answered: true, values: ["x"] });
+	const image = (id: string | undefined, reference: string): { target: { kind: string; id?: string }; reference: string; mimeType: string } => ({ target: id === undefined ? { kind: "note" } : { kind: "question", id }, reference, mimeType: "image/png" });
+	const send = (ids: string[], revision: string | undefined, images: ReturnType<typeof image>[]) => ({ askId: "a1", reason: "submitted", questions: ids.map(record), answeredCount: ids.length, unansweredIds: [], summary: "s", images, ...(revision === undefined ? {} : { partial: true, revision }) });
+	// A question with id "note" is not the note: targets are objects.
+	const whole = wholeRecord(send(["c"], undefined, [image("c", "[PIC_1]"), image(undefined, "[PIC_2]")]), [send(["a"], "r2", [image("a", "[PIC_1]")]), send(["note"], "r3", [image("note", "[PIC_1]"), image("note", "[PIC_2]")])], ["a", "note", "c"], false) as { images?: unknown[] } | undefined;
+	assert.deepEqual(whole?.images, [
+		{ ...image("a", "[PIC_1]"), revision: "r2" },
+		{ ...image("note", "[PIC_1]"), revision: "r3" },
+		{ ...image("note", "[PIC_2]"), revision: "r3" },
+		image("c", "[PIC_1]"),
+		image(undefined, "[PIC_2]"),
+	]);
+	const many = Array.from({ length: 101 }, (_, i) => send([`q${String(i)}`], `r${String(i)}`, [image(`q${String(i)}`, "[PIC_1]")]));
+	const bounded = wholeRecord(send(["last"], undefined, []), many, [], false) as { images?: { target: { id?: string } }[] } | undefined;
+	assert.deepEqual([bounded?.images?.length, bounded?.images?.[0]?.target.id], [99, "q2"], "the two hidden answers' images drop out");
+});
+
 test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
 	const { h, session, settled } = await quietChat("ask-approval");
 	try {
