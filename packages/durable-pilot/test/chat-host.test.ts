@@ -539,6 +539,15 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 	await quiet("closing the host stops the alarm");
 });
 
+test("pageTranscript agrees with PI WEB's pageMessagesAtSafeBoundary on the shared fixtures (copied from PI WEB's messagePaging.fixtures.json)", () => {
+	const fixtures = JSON.parse(readFileSync(new URL("./transcript-paging.fixtures.json", import.meta.url), "utf8")) as { name: string; messages: unknown[]; page: { before?: number; limit?: number } | null; start: number; end: number }[];
+	for (const { name, messages, page, start, end } of fixtures) {
+		// No page means the whole transcript, which the host sends without paging.
+		if (page === null) continue;
+		assert.deepEqual(pageTranscript(messages, page), { start, total: messages.length, messages: messages.slice(start, end) }, name);
+	}
+});
+
 /** An in-process Chat on the faux model (no real battery alarm), with its run count and an event-driven wait. */
 test("pageTranscript matches PI WEB's pageMessagesAtSafeBoundary: a hard limit that skips leading tool results; a 1,700-message turn chains back exactly once", () => {
 	const user = (content: string) => ({ role: "user", content });
