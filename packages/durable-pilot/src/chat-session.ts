@@ -223,7 +223,9 @@ export async function storedMessages(host: Pick<Host, "harness" | "root">): Prom
  * PI WEB's `pageMessagesAtSafeBoundary` (src/server/sessions/messagePaging.ts), kept identical (test/transcript-paging.fixtures.json):
  * a hard limit (default 20, at most 500) ending before `before`; the start moves forward past leading tool results (and
  * notices before them) so none shows without its call, and a page of only those moves back to their call message, across
- * notices between the call and its results, exceeding the limit just to reach it.
+ * notices between the call and its results, exceeding the limit just to reach it. The page also starts at or before the first
+ * call of the running turn (after the last user message) with no result after it, exceeding the limit, so a result that
+ * arrives live always lands on the newest page beside its call.
  */
 export function pageTranscript<T>(all: T[], page: TranscriptPage): { messages: T[]; start: number; total: number } {
 	const total = all.length;
@@ -240,6 +242,15 @@ export function pageTranscript<T>(all: T[], page: TranscriptPage): { messages: T
 		while (start > 0 && (isResult(start - 1) || isNotice(start - 1))) start -= 1;
 		start = Math.max(0, start - 1);
 	}
+	let turn = total;
+	while (turn > 0 && (all[turn - 1] as { role?: unknown } | null)?.role !== "user") turn -= 1;
+	const results = new Set(all.slice(turn).map((message) => (message as { role?: unknown; toolCallId?: unknown } | null)?.role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined));
+	const waits = (message: unknown) => {
+		const { role, content } = (message ?? {}) as { role?: unknown; content?: unknown };
+		return role === "assistant" && Array.isArray(content)
+			&& content.some((part: { type?: unknown; id?: unknown } | null) => part?.type === "toolCall" && typeof part.id === "string" && !results.has(part.id));
+	};
+	for (let index = turn; index < start; index += 1) if (waits(all[index])) { start = index; break; }
 	return { messages: all.slice(start, before), start, total };
 }
 

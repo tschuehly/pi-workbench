@@ -817,5 +817,165 @@
   },
   "start": 5,
   "end": 7
+ },
+ {
+  "name": "the newest page starts at a call of the running turn still waiting for a result, past the limit",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "id": "c2",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "c1",
+    "content": "ok"
+   },
+   {
+    "role": "custom",
+    "content": "child finished"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 1,
+  "end": 4
+ },
+ {
+  "name": "a call id reused from an earlier turn is still waiting in the running turn",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "c1",
+    "content": "ok"
+   },
+   {
+    "role": "user",
+    "content": "b"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "child finished"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 4,
+  "end": 6
+ },
+ {
+  "name": "a call of an earlier turn that never got a result does not grow the page",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "b"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "answer"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 3,
+  "end": 4
+ },
+ {
+  "name": "the page before a waiting call keeps the limit",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "b"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 3,
+   "limit": 1
+  },
+  "start": 2,
+  "end": 3
  }
 ]
