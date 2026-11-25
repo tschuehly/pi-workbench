@@ -258,9 +258,9 @@ function stripNumbering(value: string): string {
 	return stripped.trim() === "" ? value : stripped;
 }
 
-/** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose). */
-export function validateQuestions(questions: readonly Question[]): Question[] {
-	if (questions.length === 0) throw new AskError("An ask must contain at least one question");
+/** PI WEB `pendingAskStore.ts` validation of a question set (ids, duplicates, limits, required prose); only an approval set may have none. */
+export function validateQuestions(questions: readonly Question[], approval?: true): Question[] {
+	if (questions.length === 0 && approval !== true) throw new AskError("An ask must contain at least one question");
 	if (questions.length > QUESTION_LIMIT) throw new AskError(`An ask must not contain more than ${QUESTION_LIMIT} questions`);
 	const earlier = new Map<string, Question>();
 	return questions.map((question) => {
@@ -416,7 +416,7 @@ const QuestionParams = obj({
 }, { open: true });
 const AskParams = obj({
 	context: opt(str({ maxLength: CONTEXT_MAX, description: "Required for a new set. Markdown above the questions: what they all share." })),
-	questions: opt(arr(QuestionParams, { minItems: 1, maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order." })),
+	questions: opt(arr(QuestionParams, { maxItems: QUESTION_LIMIT, description: "Required for a new set, in reading order; questions may be omitted when approval is true." })),
 	update: opt(str({ maxLength: ID_MAX, description: "askId of an open set to revise; given context/questions replace the old ones." })),
 	withdraw: opt(str({ maxLength: ID_MAX, description: "askId of an open set to drop. Send nothing else." })),
 	approval: opt(bool({ description: "true for a plan or text in context to approve, instead of a separate confirm question: adds an Approve button." })),
@@ -489,13 +489,16 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				if (args.update !== undefined) {
 					const current = doc.open[args.update];
 					if (current === undefined) throw new AskError(`No open question set ${args.update}: it was already answered, withdrawn, or closed.`);
+					const kept = args.approval === undefined ? current.approval : approval;
+					// A revision that drops approval from a set without questions must give some.
+					if (questions === undefined && current.questions.length === 0 && kept === undefined) throw new AskError("An ask must contain at least one question");
 					const updated: PendingAsk = {
 						...current,
 						updatedAt: now,
 						revision: stableId(chatId, task, "revision"),
 						turnsSinceUpdate: 0,
 						...(context === undefined ? {} : { context }),
-						questions: questions === undefined ? (JSON.parse(JSON.stringify(current.questions)) as Question[]) : validateQuestions(questions),
+						questions: questions === undefined ? (JSON.parse(JSON.stringify(current.questions)) as Question[]) : validateQuestions(questions, kept),
 					};
 					// The agent supplied this context, even when its text equals the user's earlier edit.
 					if (context !== undefined) delete updated.contextEdited;
@@ -515,8 +518,8 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 				}
 				if (context === undefined)
 					throw new AskError("context is required: explain the finding, the options, their consequences, and your recommendation so the user can answer without reading the Chat");
-				if (questions === undefined) throw new AskError("questions are required for a new question set");
-				const validated = validateQuestions(questions);
+				if (questions === undefined && approval === undefined) throw new AskError("questions are required for a new question set");
+				const validated = validateQuestions(questions ?? [], approval);
 				// A fresh ID whose 3-character question-ref prefix no open set shares, as PI WEB's store picks one.
 				const taken = new Set(Object.keys(doc.open).map((id) => id.slice(0, 3)));
 				let askId = stableId(chatId, task);
@@ -535,14 +538,14 @@ function askTools(chatId: string, signal: Signal): ToolRegistration[] {
 			const posted = JSON.parse(JSON.stringify(result.ask)) as PendingAsk;
 			if (!result.rerun) {
 				signal({ type: "ask.opened", ask: posted });
-				if (result.kind === "opened") signal({ type: "attention", kind: "ask", id: posted.askId, detail: posted.questions[0]?.question ?? "Needs an answer" });
+				if (result.kind === "opened") signal({ type: "attention", kind: "ask", id: posted.askId, detail: posted.questions[0]?.question ?? (posted.approval === true ? "Needs approval" : "Needs an answer") });
 			}
 			const count = posted.questions.length;
 			// The user reads only the panel while answering, so context written into the Chat is lost or read twice.
 			const chatRule = "The user reads only the set while answering: say in one line that questions were posted; do not restate, summarize or add context in the Chat.";
 			const message = result.kind === "updated"
 				? `Updated open question set ${posted.askId} (${refs(posted)}). The answers still arrive later as a follow-up message. ${chatRule}`
-				: `Posted ${count} question${count === 1 ? "" : "s"} to the user as question chips above their composer, ask ${posted.askId} (${refs(posted)}). You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw. ${chatRule}`;
+				: `Posted ${count === 0 ? "the context for approval" : `${count} question${count === 1 ? "" : "s"}`} to the user as question chips above their composer, ask ${posted.askId}${count === 0 ? "" : ` (${refs(posted)})`}. You are not paused: keep working on whatever does not depend on the answers, and end your turn if nothing does. The answers arrive later as a follow-up message. Do not repost these questions; revise them with update or drop them with withdraw. ${chatRule}`;
 			return { output: text(message), details: { ask: posted, sessionId: chatId } };
 		},
 	});

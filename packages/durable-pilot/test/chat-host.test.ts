@@ -684,6 +684,42 @@ test("ask_user images: closeAsk with images delivers the answers text plus the i
 	assert.equal(integrity(store), "ok");
 });
 
+test("ask_user approval-only: a set with approval: true may omit questions or give none; without approval it is refused; its approval reaches the model first", async () => {
+	const { store, cwd } = family("ask-approval-only");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-none", text: `call:ask_user ${JSON.stringify({ context: ASK.context })}` });
+	await idle(host, 1);
+	const refused = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+	assert.equal(refused?.isError, true);
+	assert.match(textOf(refused?.content), /questions are required for a new question set/);
+	await host.call("prompt", { operationId: "op-empty", text: `call:ask_user ${JSON.stringify({ context: ASK.context, questions: [] })}` });
+	await idle(host, 2);
+	assert.equal((await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1)?.isError, true, "an empty list without approval is refused");
+	let runs = 2;
+	for (const [n, call] of [{ context: ASK.context, approval: true }, { context: ASK.context, approval: true, questions: [] }].entries()) {
+		await host.call("prompt", { operationId: `op-approve-${String(n)}`, text: `call:ask_user ${JSON.stringify(call)}` });
+		await idle(host, ++runs);
+		const posted = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.equal(posted?.isError, false, textOf(posted?.content));
+		assert.match(textOf(posted?.content), /^Posted the context for approval to the user/);
+		const opened = host.events.filter((e) => e.type === "ask.opened")[n] as UiEvent & { ask: { askId: string; revision: string; approval?: true; questions: unknown[] } };
+		assert.deepEqual([opened.ask.approval, opened.ask.questions], [true, []]);
+		await host.call("prompt", { operationId: `op-drop-${String(n)}`, text: `call:ask_user ${JSON.stringify({ update: opened.ask.askId, approval: false })}` });
+		await idle(host, ++runs);
+		const dropped = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.match(textOf(dropped?.content), /An ask must contain at least one question/, "dropping approval from a set without questions is refused");
+		const outcome = { askId: opened.ask.askId, reason: "submitted", askedAt: "", closedAt: "", context: ASK.context, approved: true, questions: [], answeredCount: 0, unansweredIds: [], summary: "Answered 0 of 0; none left unanswered" };
+		const content = `The user approved the context.\nThe user submitted answers to question set ${opened.ask.askId}.\n\nAnswered 0 of 0; none left unanswered`;
+		assert.equal((await host.call<{ result: string }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId: `op-close-${String(n)}`, outcome, content })).result, "closed");
+		await idle(host, ++runs);
+	}
+	assert.equal(logged(store).filter((l) => l.label.startsWith("The user approved the context.")).length, 2, "each approval reached the model, approval first");
+	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
 test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the description puts all explanation in the set", async () => {
 	const { store, cwd } = family("ask-detail");
 	const host = new ChatHost(store, cwd);
