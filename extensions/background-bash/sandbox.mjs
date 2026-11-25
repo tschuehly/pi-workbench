@@ -451,7 +451,7 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "the command was not run");
   const { owners, rules } = await jobGrants(job, env);
-  const dataDirs = [env.PI_WEB_DATA_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
+  const dataDirs = [env.PI_WEB_DATA_DIR, env.PI_DURABLE_HOST_SOCKET_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };

@@ -59,6 +59,12 @@ function run(dir) {
 }
 
 function runLead(job, output, finish, launch) {
+  // A runner that starts past the admitted deadline (readJob may already have settled it) never starts the command.
+  if (Date.now() >= job.expiresAt) {
+    closeSync(output);
+    finish({ error: `Stopped before launch: past its ${Math.round((job.expiresAt - job.startedAt) / 1000)}-second deadline` });
+    process.exit(0);
+  }
   const child = spawn(launch.file, launch.args, { cwd: job.cwd, stdio: ["ignore", output, output], env: launch.env });
   child.once("error", (error) => { finish({ error: String(error) }); process.exit(0); });
   // Parity with Pi's bash tool: a signal-killed shell reports 128 + signal number.
