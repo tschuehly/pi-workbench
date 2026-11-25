@@ -381,8 +381,8 @@ schedule() {
   local reservation
   reservation=$(mktemp -d "$job/reservation.XXXXXXXX")
   echo "queued $label" >"$reservation/owner"
-  mv "$reservation" "$LOCK"
-  launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -rf "$LOCK"; exit 1; }
+  ln -s "$reservation" "$LOCK" # release is now one unlink, even if interrupted
+  launchctl bootstrap "gui/$uid" "$job/job.plist" || { rm -f "$LOCK"; exit 1; }
   echo "scheduled $label in ${delay}s; log: $job/job.log"
 }
 
@@ -621,7 +621,7 @@ mutex wait || exit 6
 trap 'launchctl bootout gui/$uid/$label' EXIT
 [[ \$(cat "$LOCK/owner" 2>/dev/null) == "queued $label" ]] || { echo 'refused: job no longer owns the reservation'; exit 6; }
 echo "running $label" >"$LOCK/next" && mv "$LOCK/next" "$LOCK/owner" || exit 1
-trap 'rm -rf "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
+trap 'rm -f "$LOCK"; launchctl bootout gui/$uid/$label' EXIT
 sleep $delay
 [[ \$("$self" current) == "$lwb $lpw" ]] || { echo 'refused: installed pair changed before job started'; exit 8; }
 if [[ $force == 0 ]] && ! "$self" check-idle; then echo "refused \$(date -u +%FT%TZ): subagents started during the delay; nothing changed"; exit 3; fi
@@ -698,7 +698,7 @@ relink "$DATA/plugins/pi-workbench" "$PROJECTS/pi-workbench$SUFFIX/packages"
 stop_all || rollback
 cp -p "$job"/new/$LABEL.*.plist "\$la/" || rollback
 for s in sessiond web; do launchctl bootstrap gui/$uid "\$la/$LABEL.\$s.plist" || rollback; done
-for i in \$(seq 90); do healthy && { rm "$STORE/in-progress"; echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -rf "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
+for i in \$(seq 90); do healthy && { rm "$STORE/in-progress"; echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -f "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
 chmod +x "$job/job.sh"

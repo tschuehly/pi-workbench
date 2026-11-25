@@ -233,6 +233,23 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
   assert.ok(!existsSync(lock));
 });
 
+test("another scheduler cannot acquire a stale reservation between inspection and removal", () => {
+  const h = harness(), lock = join(h.store, "promote.lock");
+  put(join(lock, "owner"), `pid ${deadPid()}\n`);
+  // At the old race window the second process would also take over, then lose its reservation to the first.
+  put(join(h.bin, "rm"), `#!/bin/sh
+if [ "$2" = "${lock}" ] && [ -z "$CONTENDER" ]; then
+  CONTENDER=1 /bin/bash "${script}" switch ${wbRev(2)} ${pwRev(2)} --from none none 0 >/dev/null 2>&1
+  echo $? > "$HOME/contender-status"
+fi
+exec /bin/rm "$@"\n`);
+  spawnSync("chmod", ["+x", join(h.bin, "rm")]);
+  assert.equal(h.sw(wbRev(1), pwRev(1)).status, 0);
+  assert.equal(h.log("contender-status"), "6\n");
+  assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
+  assert.ok(lstatSync(lock).isSymbolicLink(), "releasing the reservation takes one unlink");
+});
+
 test("a displaced queued job cannot run or unlock its replacement", () => {
   const h = harness();
   assert.equal(h.sw(wbRev(1), pwRev(1)).status, 0);
