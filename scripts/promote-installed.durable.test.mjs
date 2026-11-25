@@ -204,11 +204,12 @@ test("switch needs the live pair (--from), refuses a stale one, and one promotio
 
   // The scheduled job holds the lock while it runs: every other promotion fails fast.
   writeFileSync(join(h.home, "job-running"), "");
-  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3)], ["switch-web", pwRev(3)]]) {
+  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3)], ["switch-web", pwRev(3)], ["prune", "--apply"], ["prepare", wbRev(4), pwRev(4)]]) {
     const busy = h.run(args);
     assert.equal(busy.status, 6, `${args[0]}: ${busy.stderr}`);
     assert.match(busy.stderr, /another promotion is in progress \(queued com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
   }
+  assert.ok(existsSync(join(h.store, `releases/${short(wbRev(2))}-${short(pwRev(2))}/pi-web`)), "pending release survives prune");
   assert.equal(jobs(), 2);
   // Its end releases the lock.
   const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));

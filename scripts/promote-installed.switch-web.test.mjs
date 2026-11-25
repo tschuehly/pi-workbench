@@ -39,7 +39,7 @@ function scenario({ healthy, daemonChanged = false }) {
   shim("curl", `grep -q "${healthy ? next : old}" "$HOME/Library/LaunchAgents/com.pi-web-durable.web.plist" || exit 1\necho '{"plugins":[{"id":"pi-workbench","server":{"state":"active","restartRequired":false}}]}'`);
   const result = spawnSync("bash", [script, "switch-web", "HEAD"], {
     encoding: "utf8",
-    env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: projects, PI_PROMOTE_PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: projects, PI_PROMOTE_ETIME_PS: "true", PI_PROMOTE_PATH: `${bin}:${process.env.PATH}` },
   });
   const web = readFileSync(join(la, "com.pi-web-durable.web.plist"), "utf8");
   const log = (() => { try { return readFileSync(join(home, "launchctl.log"), "utf8"); } catch { return ""; } })();

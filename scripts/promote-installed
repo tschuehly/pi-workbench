@@ -378,7 +378,7 @@ force=0; [[ ${1:-} == --force ]] && { force=1; shift; }
 [[ ${1:-} == current ]] && { echo "$(live pi-workbench) $(live pi-web)"; exit 0; }
 [[ ${1:-} == check-idle ]] && { check_idle; exit $?; }
 [[ ${1:-} == check-hosts && $# -eq 2 ]] && { check_hosts "$2"; exit $?; }
-[[ ${1:-} == prune && $# -le 2 ]] && { prune_builds "${2:-}"; exit $?; }
+[[ ${1:-} == prune && $# -le 2 ]] && { [[ ${2:-} != --apply ]] || lock; prune_builds "${2:-}"; exit $?; }
 [[ ${1:-} == sessiond-unchanged && $# -eq 3 ]] && { sessiond_unchanged "$2" "$3"; exit $?; }
 if [[ ${1:-} == switch-web && $# -eq 2 ]]; then
   lock
@@ -469,6 +469,7 @@ if [[ $1 == switch ]]; then
   fi
   if [[ -n $LATEST ]] && matches "$lwb" "$2" && matches "$lpw" "$3"; then echo "up to date: $lwb $lpw is the latest pair; nothing to switch"; exit 0; fi
 fi
+[[ $1 != prepare ]] || lock
 if [[ $1 == switch && $force == 0 ]]; then check_idle || exit 3; fi
 mkdir -p "$STORE"
 wb=$(prepare_one pi-workbench "$2") || { echo "prepare pi-workbench failed" >&2; exit 1; }
@@ -597,7 +598,7 @@ ln -sfn "$PROJECTS/pi-workbench$SUFFIX/packages" "$DATA/plugins/pi-workbench"
 stop_all
 cp -p "$job"/new/$LABEL.*.plist \$la/ || rollback
 for s in sessiond web; do launchctl bootstrap gui/$uid \$la/$LABEL.\$s.plist || rollback; done
-for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; "$self" prune --apply || true; exit 0; }; sleep 1; done
+for i in \$(seq 90); do healthy && { echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -rf "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF
 chmod +x "$job/job.sh"
