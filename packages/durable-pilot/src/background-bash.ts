@@ -147,11 +147,11 @@ function confirmDialog(text: string): Promise<boolean> {
 type Hooks = { deliver: <T>(work: () => Promise<T>) => Promise<T>; changed: () => void };
 
 /**
- * Temp folders the Chat's environments made (codemode's output files) outside home, where no fence grants anything; by
- * on-disk real path (case and Unicode form as APFS keeps them), as each write's folder resolves then.
+ * A temp folder a Chat's environment made (codemode's output files): `made` as the tool layer names it, `granted` as
+ * its parent resolved before the folder was made (Seatbelt compares real paths).
  * shortcut: in memory, so a codemode rerun after a host restart cannot write its recorded folder; record them if that matters.
  */
-const tempDirs = new Set<string>();
+export type TempDir = { readonly made: string; readonly granted: string };
 const realOrNone = (path: string) => {
 	try {
 		return realpathSync.native(path);
@@ -159,17 +159,19 @@ const realOrNone = (path: string) => {
 		return undefined;
 	}
 };
-/** Whether `dir`'s real path lies outside the real `home` (every write grant lies inside it, but /dev). */
-export const outsideHome = (dir: string, home: string) => {
-	const real = realOrNone(dir);
-	const root = realOrNone(home) ?? home;
-	return real !== undefined && real !== root && !inside(real, root);
+/**
+ * The temp folder a write of `target` may add to its fenced grants: one the Chat made that `target` names directly by
+ * its path as given, never one it reaches through a link (Astra round 5: a checkout folder swapped for a link to it).
+ */
+export const tempGrant = (target: string, temps: Iterable<TempDir>) => {
+	for (const dir of temps) if (inside(target, dir.made) || inside(target, dir.granted)) return dir.granted;
+	return undefined;
 };
 
 /** fs error codes of the fenced helper as Durable's file errors; anything else (no sandbox) is a refusal. */
 const FILE_ERRORS: Record<string, FileErrorCode> = { ABORT_ERR: "aborted", EISDIR: "is_directory", ENOTDIR: "not_directory", ENOENT: "not_found", EIO: "unknown" };
 
-type Fence = (path: string, content: string | Uint8Array, signal: AbortSignal | undefined) => Promise<boolean>;
+type Fence = (path: string, content: string | Uint8Array, signal: AbortSignal | undefined, also: string | undefined) => Promise<boolean>;
 
 /**
  * A conversation's execution environment whose file writes (write and edit tools, codemode's files) go through `fence`:
@@ -177,30 +179,30 @@ type Fence = (path: string, content: string | Uint8Array, signal: AbortSignal | 
  */
 class FencedEnv extends NodeExecutionEnv {
 	readonly #fence: Fence;
+	readonly #temps: Set<TempDir>;
 
-	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: Fence) {
+	constructor(options: ConstructorParameters<typeof NodeExecutionEnv>[0], fence: Fence, temps: Set<TempDir>) {
 		super(options);
 		this.#fence = fence;
+		this.#temps = temps;
 	}
 
 	override async createTempDir(prefix: string | undefined, c: Context): Promise<Result<string, FileError>> {
-		// A TMPDIR inside home could lie in a grant, where a background job could swap the folder: fenced like any write.
-		// Only where OS temp itself lies outside home: no fenced command can then create or swap anything in it, so the
-		// folder made there is the one registered (never re-resolved after its creation).
+		// Never re-resolved after its creation: a job that swaps it for a link then only breaks the grant (no real path
+		// under it), never moves it.
 		const parent = realOrNone(tmpdir());
 		const made = await super.createTempDir(prefix, c);
-		if (made.ok && parent !== undefined && outsideHome(parent, process.env.HOME ?? homedir())) tempDirs.add(join(parent, basename(made.value)));
+		if (made.ok && parent !== undefined) this.#temps.add({ made: made.value, granted: join(parent, basename(made.value)) });
 		return made;
 	}
 
 	override async writeFile(path: string, content: string | Uint8Array, c: Context): Promise<Result<void, FileError>> {
 		const target = await this.absolutePath(path, c);
 		if (!target.ok || c.abortSignal?.aborted === true) return super.writeFile(path, content, c);
-		// Written by the folder's real path as checked: no link on it, and nothing on it a fenced command can change.
-		const folder = realOrNone(dirname(target.value));
-		if (folder !== undefined && tempDirs.has(folder)) return super.writeFile(join(folder, basename(target.value)), content, c);
+		// Every write in the fence (Astra round 5: an unfenced exemption is unsafe where a grant reaches OS temp); a temp
+		// folder this Chat made is added to the grants of a write that names it.
 		try {
-			return (await this.#fence(target.value, content, c.abortSignal)) ? ok(undefined) : await super.writeFile(path, content, c);
+			return (await this.#fence(target.value, content, c.abortSignal, tempGrant(target.value, this.#temps))) ? ok(undefined) : await super.writeFile(path, content, c);
 		} catch (error) {
 			// Fail closed: a refused write, or no proven sandbox, writes nothing.
 			const code = FILE_ERRORS[String((error as { code?: unknown }).code)] ?? "permission_denied";
@@ -233,6 +235,8 @@ export class BackgroundBash {
 	#reader: DocumentReader | undefined;
 	/** The owner's full-access switch for the lead's commands: in memory only, so it ends with this host (Thomas, 24 Nov). */
 	#fullAccess = false;
+	/** The temp folders this Chat's environments made (one environment per tool call shares them). */
+	readonly #temps = new Set<TempDir>();
 
 	constructor(options: BackgroundBashOptions) {
 		this.#options = options;
@@ -477,11 +481,11 @@ export class BackgroundBash {
 	 * D13 (a chat folder swapped for a link) fixes both.
 	 */
 	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
-		return new FencedEnv(options, async (path, content, signal) => {
+		return new FencedEnv(options, async (path, content, signal, also) => {
 			if (this.#unfenced(conversationId)) return false;
-			await fencedWrite(path, content, { cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal });
+			await fencedWrite(path, content, { cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal, also });
 			return true;
-		});
+		}, this.#temps);
 	}
 
 	/** Where its commands run unfenced: no fence on this machine, the lead under /full-access, or a host already inside one. */

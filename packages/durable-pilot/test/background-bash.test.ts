@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
-import { BackgroundBash, BashJobsDoc, outsideHome } from "../src/background-bash.ts";
+import { BackgroundBash, BashJobsDoc, tempGrant } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -632,6 +632,23 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 		const raced = await bash.env({ cwd, shellEnv: {} }, "lead" as never).writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
 		assert.equal(raced.ok ? "written" : raced.error.code, "permission_denied");
 		assert.deepEqual(readdirSync(away), []);
+		// Astra round 5: a temp folder the Chat made is writable by name (fenced, its folder granted), never through a link.
+		const env = bash.env({ cwd, shellEnv: {} }, "lead" as never);
+		const temp = await env.createTempDir("write-fence-", {} as never);
+		assert.ok(temp.ok);
+		try {
+			const direct = await env.writeFile(join(temp.value, "own.txt"), "own", {} as never);
+			assert.equal(direct.ok, true, "codemode writes its own temp folder");
+			rmSync(join(cwd, "sub"));
+			symlinkSync(temp.value, join(cwd, "sub"));
+			const linked = await env.writeFile(join(cwd, "sub", "x.txt"), "x", {} as never);
+			assert.equal(linked.ok ? "written" : linked.error.code, "permission_denied", "a checkout path swapped for a link to it");
+			assert.deepEqual(readdirSync(temp.value), ["own.txt"]);
+			rmSync(join(cwd, "sub"));
+			symlinkSync(away, join(cwd, "sub"));
+		} finally {
+			rmSync(temp.value, { recursive: true, force: true });
+		}
 		await bash.fullAccess("on", "test", async () => true);
 		assert.equal(await bash.writeRefusal(outside, cwd, "lead" as never), undefined);
 		assert.ok(await bash.writeRefusal(outside, cwd, "child" as never), "a Subagent stays fenced");
@@ -645,15 +662,13 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 });
 
 // Runs inside a fence too: path checks only.
-test("codemode's temp folders write unfenced only outside home, by real path: a home subfolder named ..cache is inside", () => {
-	const home = join(ROOT, "fake-home");
-	mkdirSync(join(home, "..cache"), { recursive: true });
-	symlinkSync(join(home, "..cache"), join(ROOT, "alias-in-home"));
-	assert.equal(outsideHome(join(home, "..cache"), home), false);
-	assert.equal(outsideHome(join(home, "..cache").toUpperCase(), home), false, "in any case spelling APFS accepts");
-	assert.equal(outsideHome(join(ROOT, "alias-in-home"), home), false, "an alias resolves into home");
-	assert.equal(outsideHome(home, home), false);
-	assert.equal(outsideHome(join(ROOT, "jobs-elsewhere-missing"), home), false, "a folder that does not exist is never exempt");
-	mkdirSync(join(ROOT, "outside-home"));
-	assert.equal(outsideHome(join(ROOT, "outside-home"), home), true);
+test("a write gets a temp folder the Chat made only by naming it, never through a link or ..", () => {
+	const temps = [{ made: "/var/folders/x/T/codemode-a", granted: "/private/var/folders/x/T/codemode-a" }];
+	assert.equal(tempGrant("/var/folders/x/T/codemode-a/out.png", temps), "/private/var/folders/x/T/codemode-a");
+	assert.equal(tempGrant("/private/var/folders/x/T/codemode-a/sub/out.png", temps), "/private/var/folders/x/T/codemode-a");
+	assert.equal(tempGrant("/var/folders/x/T/codemode-a/../codemode-b/out.png", temps), undefined);
+	assert.equal(tempGrant("/var/folders/x/T/codemode-a", temps), undefined, "not the folder itself");
+	mkdirSync(join(ROOT, "temp-made"));
+	symlinkSync(join(ROOT, "temp-made"), join(ROOT, "checkout-sub"));
+	assert.equal(tempGrant(join(ROOT, "checkout-sub", "x.txt"), [{ made: join(ROOT, "temp-made"), granted: join(ROOT, "temp-made") }]), undefined, "a link to it");
 });

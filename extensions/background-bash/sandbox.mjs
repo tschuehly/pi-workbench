@@ -391,15 +391,17 @@ function sandboxBin(env, home, what) {
  * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
  * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
  * read-only too. The kernel checks the path as it is when the file opens, so a folder a background job swaps for a link
- * after the tool's approval (`writeRefusal`) leads nowhere. Throws when the fence refuses or no sandbox is proven,
- * with `code` as Node's fs errors carry it.
+ * after the tool's approval (`writeRefusal`) leads nowhere. `also`: one more write folder for this write only (a temp
+ * folder the Chat's environment made). Throws when the fence refuses or no sandbox is proven, with `code` as Node's fs
+ * errors carry it.
  */
-export async function fencedWrite(path, content, { cwd, sessionId, env, signal }) {
+export async function fencedWrite(path, content, { cwd, sessionId, env, signal, also }) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "nothing was written");
   const rules = await writeGrants({ cwd, sessionId, env });
   if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
-  const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
+  const write = typeof also === "string" && also !== "" ? [...rules.write, also] : rules.write;
+  const args = sandboxArgs({ ...rules, write, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", dirname(path), path]);
   const { code, stderr } = await new Promise((done) => {
     // A fixed environment: nothing of the tool's (BASH_ENV, ENV) reaches the shell.
     const child = spawn(bin, args, { env: { PATH: "/usr/bin:/bin" }, stdio: ["pipe", "ignore", "pipe"], ...(signal ? { signal } : {}) });
