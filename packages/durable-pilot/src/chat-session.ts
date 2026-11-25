@@ -1084,6 +1084,8 @@ export class ChatSession {
 		if ((await this.#host.models.checkAuth(provider)) === undefined) throw new Error(`No stored login for ${provider}: log in with Pi (/login) first`);
 		const model = parseModel(`${provider}/${modelId}`);
 		const thinkingLevel = await applyModel(this.#host, model);
+		// A timer summary admitted for the previous model would go to its provider: cancelled with its intent.
+		this.#cancelIdle();
 		this.#record("model.select", { provider, model: modelId, effort: thinkingLevel ?? null, source: "set" });
 		await this.#publishStatus();
 	}
@@ -1315,6 +1317,8 @@ export class ChatSession {
 	 */
 	async #admitIdle(arm: IdleArm, own: ModelRef, summaryModel: IdleIntent["summaryModel"], baseline: IdleBaseline): Promise<void> {
 		const { root } = this.#host;
+		// A stale callback (cancelled since it fired) or an admitted summary's controller: never touched, so a cancel still reaches that summary.
+		if (arm.epoch !== this.#idleEpoch || this.#idleAbort !== undefined) return;
 		const abort = new AbortController();
 		this.#idleAbort = abort;
 		let intent: IdleIntent | undefined;

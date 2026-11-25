@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
-import { AgentDoc, defineExtension, GenerationTask, hook, LiveDoc, type SubmissionId } from "@earendil-works/pi-durable";
+import { AgentDoc, defineExtension, defineTool, GenerationTask, hook, LiveDoc, type SubmissionId, ToolTask } from "@earendil-works/pi-durable";
+import { obj } from "@earendil-works/pi-schema";
 import { DEFAULT_COMPACTION, openChatHost } from "../src/chat.ts";
 import { CheapWakeDoc, cheapModel, cheapWakeExtension, submitWake } from "../src/cheap-wake.ts";
 import { ChatSession } from "../src/chat-session.ts";
@@ -409,8 +410,9 @@ test("an extension's onYield continuation of a cheap run answers on the own mode
 	}
 });
 
-test("a cheap run a host kill interrupted resumes on the own model after the restart, without hand_back or the instruction", async () => {
-	const { store, cwd } = family("cheap-kill-mid-run");
+for (const stop of ["kill", "close"] as const)
+test(`a cheap run a host ${stop === "kill" ? "kill" : "orderly close"} interrupted resumes on the own model after the restart, without hand_back or the instruction`, async () => {
+	const { store, cwd } = family(`cheap-${stop}-mid-run`);
 	const gate = join(cwd, "turn-gate-file");
 	// The real host process on the scripted model under the own model's name, so a kill is a real restart.
 	const args = ["--model", `${OWN.provider}/${OWN.modelId}`, "--scripted-providers"];
@@ -431,7 +433,8 @@ test("a cheap run a host kill interrupted resumes on the own model after the res
 	writeFileSync(join(cwd, "flag"), "");
 	await waitFor(() => completions().length === 1, "the cheap wake's request");
 	assert.equal(completions()[0]!.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
-	await first.kill();
+	if (stop === "kill") await first.kill();
+	else await first.close();
 	const second = new ChatHost(store, cwd, { args });
 	try {
 		await second.ready;
@@ -444,5 +447,66 @@ test("a cheap run a host kill interrupted resumes on the own model after the res
 		}
 	} finally {
 		await second.close();
+	}
+});
+
+test("a host restart after hand_back queued its rerun but before its terminating result finishes the cheap run once: one own-model request, the rerun", async () => {
+	const c = await compacted("cheap-restart-after-hand-back");
+	// Holds hand_back's result after its receipt and queued rerun committed, until the host's close aborts the call.
+	let held = false;
+	c.h.registry.install(defineExtension({
+		name: "test.hold-hand-back",
+		hooks: [hook(ToolTask, {
+			afterTool: async (call, result, _api, ctx) => {
+				if (call.name !== "hand_back" || result.isError === true) return undefined;
+				held = true;
+				await new Promise((resolve) => (ctx.abortSignal?.aborted === true ? resolve(undefined) : ctx.abortSignal?.addEventListener("abort", resolve, { once: true })));
+				throw new Error("host closing");
+			},
+		})],
+	}));
+	let before: number;
+	try {
+		await c.startWake("job-1", "hand_back:2 tests failed");
+		await until(() => held, "the held hand_back result");
+		assert.equal(Object.keys((await c.h.harness.snapshot(CheapWakeDoc, c.h.root.id, context))?.handedBack ?? {}).length, 1, "hand_back committed its receipt and rerun");
+		before = c.requests().length;
+	} finally {
+		await c.close();
+	}
+	const again = await chat("cheap-restart-after-hand-back", c.dir);
+	try {
+		await until(async () => (await again.h.harness.snapshot(LiveDoc, again.h.root.id, context))?.run === undefined && again.requests().length > before, "the restored Chat settled");
+		await again.h.root.waitForIdle(context);
+		const after = again.requests().slice(before);
+		assert.deepEqual(after.map((r) => r.label.slice(0, 26)), ["The cheaper model handed t"], `one own-model request, the rerun: ${JSON.stringify(after.map((r) => r.label))}`);
+		assertOwn(after[0], "the rerun");
+		assert.equal(await handedBackMessages(again), 1, "one rerun message");
+	} finally {
+		await again.close();
+	}
+});
+
+test("a tool handoff (as checkpoint_and_continue) inside a cheap run continues on the own model, without hand_back or the instruction", async () => {
+	const c = await compacted("cheap-handoff");
+	try {
+		c.h.registry.install(defineExtension({
+			name: "test.handoff",
+			tools: [defineTool({
+				name: "test_handoff",
+				description: "Replace the context with a handoff.",
+				parameters: obj({}, { open: true }),
+				execute: async () => ({ output: [{ type: "text" as const, text: "reset" }], control: { handoff: "handoff continuation" } }),
+			})],
+		}));
+		await c.settle(await submitWake(c.h.root, { type: "input", content: "call:test_handoff {}", whenBusy: "followUp", requestId: "job-handoff" }, c.h.models));
+		await c.h.root.waitForIdle(context);
+		const all = c.requests();
+		assert.equal(all.find((r) => r.label.startsWith("call:test_handoff"))?.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
+		const next = all.find((r) => r.label === "handoff continuation");
+		assertOwn(next, "the handoff's new phase");
+		assert.equal(next!.cheapInstruction, undefined, "the new phase has no cheap-turn instruction");
+	} finally {
+		await c.close();
 	}
 });

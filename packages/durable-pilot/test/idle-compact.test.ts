@@ -150,6 +150,11 @@ test("the timer's summary comes from the provider's own Sonnet or Terra, never a
 	assert.equal(idle.summaryModelFor({ provider: "github-copilot", modelId: "claude-opus-5-5" }), undefined);
 });
 
+test("a heavy Chat model outside the routing roster still gets its provider's summary writer", () => {
+	assert.deepEqual(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-opus-5" }), { provider: "anthropic", modelId: "claude-sonnet-5-5" });
+	assert.deepEqual(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.1-sol" }), { provider: "openai-codex", modelId: "gpt-6.1-terra" });
+});
+
 test("a Chat with no cheaper summary writer gets none: the writer itself, or a light-tier model", () => {
 	assert.equal(idle.summaryModelFor({ provider: "anthropic", modelId: "claude-sonnet-5-5" }), undefined, "a Sonnet Chat");
 	assert.equal(idle.summaryModelFor({ provider: "openai-codex", modelId: "gpt-6.1-terra" }), undefined, "a Terra Chat");

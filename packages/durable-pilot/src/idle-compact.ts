@@ -16,7 +16,7 @@ import { serializeConversation } from "@earendil-works/pi-coding-agent";
 import { AgentDoc, CompactionTask, defineExtension, hook, InboxDoc, LiveDoc, type ModelRef } from "@earendil-works/pi-durable";
 import type { Checkpoint, WorkstreamSession, WorkstreamStore } from "../../workstream-store/src/index.js";
 import { compactionInstructions } from "../../../extensions/context-checkpoint/coordinator.mjs";
-import { heavy } from "./cheap-wake.ts";
+import { light } from "./cheap-wake.ts";
 import { redact } from "./redact.ts";
 import { defineDoc } from "./store-schema.ts";
 
@@ -121,11 +121,12 @@ export const madeBy = (message: { provider: string; model: string }, ref: ModelR
 
 /**
  * The cheap summary model for a Chat on `own`; none for a provider without one, and none when it would save nothing:
- * `own` is that model itself or not a heavier tier's (a light or unknown model).
+ * `own` is that model itself or a light tier model (as every cheap wake's override model is). Any other model of the
+ * provider qualifies, also one the routing roster does not list (e.g. claude-opus-5).
  */
 export const summaryModelFor = (own: ModelRef): ModelRef | undefined => {
 	const modelId = IDLE_SUMMARY_MODELS[own.provider];
-	return modelId === undefined || modelId === own.modelId || !heavy(own) ? undefined : { provider: own.provider, modelId };
+	return modelId === undefined || modelId === own.modelId || light(own) ? undefined : { provider: own.provider, modelId };
 };
 
 /** What the session tells the hook: why a timer compaction may not summarize now (in-process state), and where its warnings and usage go. */
@@ -169,20 +170,26 @@ export function idleCompaction() {
 						if (gate.blocked(Number(api.conversationId), intent.task) !== undefined || api.now() >= intent.expiresAt) return decline();
 						if ((await api.snapshot(LiveDoc, api.conversationId, c))?.run !== undefined || ((await api.snapshot(InboxDoc, api.conversationId, c))?.items.length ?? 0) > 0) return decline();
 						// The Chat's model changed since admission: the summary would go to the previous one's provider.
-						const own = (await api.snapshot(AgentDoc, api.conversationId, c))?.model;
-						const writer = own === undefined ? undefined : summaryModelFor(own);
-						if (writer?.provider !== intent.summaryModel.provider || writer.modelId !== intent.summaryModel.modelId) return decline();
+						const writerChanged = async () => {
+							const own = (await api.snapshot(AgentDoc, api.conversationId, c))?.model;
+							const writer = own === undefined ? undefined : summaryModelFor(own);
+							return writer?.provider !== intent.summaryModel.provider || writer.modelId !== intent.summaryModel.modelId;
+						};
+						if (await writerChanged()) return decline();
 						const { provider, modelId } = intent.summaryModel;
 						const model = api.models.getModel(provider, modelId);
 						if (model === undefined) return decline(`Idle compaction skipped: ${provider}/${modelId} is not available.`);
 						const prompt = `<conversation>\n${serializeConversation(compaction.messages as never)}\n</conversation>\n\n${IDLE_INSTRUCTIONS}`;
-						const signals = [AbortSignal.timeout(SUMMARY_TIMEOUT_MS), gate.signal()].filter((signal) => signal !== undefined);
+						const cancel = gate.signal();
+						const signals = [AbortSignal.timeout(SUMMARY_TIMEOUT_MS), cancel].filter((signal) => signal !== undefined);
 						const message = await api.models.completeSimple(
 							model,
 							{ systemPrompt: SUMMARY_SYSTEM, messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: api.now() }] },
 							{ maxTokens: Math.min(SUMMARY_MAX_TOKENS, model.maxTokens > 0 ? model.maxTokens : SUMMARY_MAX_TOKENS), cacheRetention: "none", signal: AbortSignal.any(signals) },
 						);
 						gate.usage(message);
+						// An attempt cancelled (a model switch, the viewer gone) or whose writer changed while it ran is never placed.
+						if (cancel?.aborted === true || (await writerChanged())) return decline();
 						const summary = summaryText(message);
 						if (summary !== undefined) return { summary: redact(summary) };
 						if (message.stopReason === "aborted") return decline();

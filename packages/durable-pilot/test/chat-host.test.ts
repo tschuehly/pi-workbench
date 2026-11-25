@@ -955,6 +955,108 @@ test("idle cache timer: the Chat's model changing before the timer's admission s
 	}
 });
 
+/** Holds the timer summary's provider auth (Sonnet's), before anything is sent, until `release`. */
+function holdSummaryAuth(h: Awaited<ReturnType<typeof idleChat>>["h"]) {
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	const state = { held: false, release: () => release() };
+	const getAuth = h.models.getAuth.bind(h.models);
+	h.models.getAuth = (async (model: unknown, options?: never) => {
+		const target = model as { provider?: string; id?: string };
+		if (target.provider === "anthropic" && target.id === "claude-sonnet-5-5" && !state.held) {
+			state.held = true;
+			await released;
+		}
+		return getAuth(model as never, options);
+	}) as unknown as typeof h.models.getAuth;
+	return state;
+}
+
+test("idle cache timer: the owner switching models while the timer's summary waits for provider auth aborts it: nothing goes to the previous provider, nothing is placed", async () => {
+	const { store, cwd } = family("idle-switch-held-auth");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const auth = holdSummaryAuth(h);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => auth.held, "the timer summary waiting for its auth");
+		await session.setModel("openai-codex", "gpt-6.1-terra");
+		auth.release();
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [], "no summary request to the previous provider");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		auth.release();
+		await session.close();
+	}
+});
+
+test("idle cache timer: a stale timer callback released after a newer summary started never takes over its cancel: losing the last viewer still cancels it", async () => {
+	const { store, cwd } = family("idle-stale-callback");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	// The first timer callback is held at its read of the Chat's model (its `status()` read passes).
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	let held = false;
+	const agent = h.root.agent.bind(h.root);
+	h.root.agent = (async (c: Parameters<typeof agent>[0]) => {
+		const stack = new Error().stack ?? "";
+		if (!held && /idleFire/.test(stack) && !/status/.test(stack)) {
+			held = true;
+			await released;
+		}
+		return agent(c);
+	}) as typeof h.root.agent;
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => held, "the held first timer callback");
+		// Tab closed and reopened: a new timer fires at once and its summary is in flight.
+		session.setViewed(false);
+		session.setViewed(true);
+		await until(() => summaries(store).length === 1, "the newer summary request");
+		release();
+		await wait(500);
+		// The last tab closes: the newer summary must be cancelled.
+		session.setViewed(false);
+		writeFileSync(gate, "");
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "the cancelled summary placed nothing");
+		assert.equal(await markers(), 0);
+	} finally {
+		release();
+		writeFileSync(gate, "");
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: a /compact that finishes while the timer's summary is held leaves a wake on the own model", async () => {
+	const { store, cwd } = family("idle-manual-during-timer");
+	const { h, session, until, settled, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const auth = holdSummaryAuth(h);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => auth.held, "the held timer summary");
+		await session.compact();
+		await until(compacted, "the /compact summary placed while the timer's is held");
+		const id = await submitWake(h.root, wakeDraft("job-1", "all tests passed"), h.models);
+		assert.equal((await h.harness.snapshot(LiveDoc, h.root.id, context))?.run?.override, undefined, "no cheap run while a timer compaction is active");
+		auth.release();
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		await quiet();
+		assert.equal(turns(store).at(-1)?.model, `${OPUS.provider}/${OPUS.modelId}`, "the wake ran on the own model");
+	} finally {
+		auth.release();
+		await session.close();
+	}
+});
+
 test("idle cache timer: a replayed prompt (fresh: false) leaves the timer armed", async () => {
 	const { store, cwd } = family("idle-replay");
 	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);

@@ -83,7 +83,7 @@ index ed1f22b..b3e7998 100644
      readonly keepFailure?: boolean;
  }): Promise<void>;
 diff --git a/dist/harness/generation.js b/dist/harness/generation.js
-index 56f3055..6390736 100644
+index 56f3055..3dc9e1c 100644
 --- a/dist/harness/generation.js
 +++ b/dist/harness/generation.js
 @@ -107,6 +107,8 @@ export const GenerationTask = defineTask({
@@ -103,7 +103,7 @@ index 56f3055..6390736 100644
                  };
                  return { status: "running", checkpoint: { phase: "request", ...request } };
              }, context);
-@@ -125,8 +128,17 @@ export const GenerationTask = defineTask({
+@@ -125,8 +128,20 @@ export const GenerationTask = defineTask({
              // The host stopped while this request was in flight: a failed attempt, not a resend (spec §8.3).
              if (task.restarts !== undefined)
                  return interrupted(runtime, task.state.checkpoint, context);
@@ -113,16 +113,19 @@ index 56f3055..6390736 100644
 +            // A request prepared under a run override that has since ended (a reopened host drops it) is prepared again
 +            // on the stored agent, never sent on the override's model and tools.
 +            if (override === true) {
-+                const moved = await runtime.commit(async (tx) => (await tx.doc(LiveDoc, conversationId)).run?.override === undefined
-+                    ? { status: "running", checkpoint: { phase: "prepare", attempt, ...(compacted === undefined ? {} : { compacted }) } }
-+                    : undefined, context);
-+                if (moved !== undefined)
++                // `commit` returns nothing: the phase change is tracked here, so the request is never sent after it.
++                let moved = false;
++                await runtime.commit(async (tx) => {
++                    moved = (await tx.doc(LiveDoc, conversationId)).run?.override === undefined;
++                    return moved ? { status: "running", checkpoint: { phase: "prepare", attempt, ...(compacted === undefined ? {} : { compacted }) } } : undefined;
++                }, context);
++                if (moved)
 +                    return;
 +            }
              // The attempt shown is presentation, stored like progress (`PROGRESS_COMMIT`); converting a partial left by an
              // interrupted attempt appends an entry, which makes the commit immediate.
              await runtime.commit(async (tx) => {
-@@ -763,8 +775,11 @@ async function concludeAnswer(tx, runtime, live, boundary, answer, continuation,
+@@ -763,8 +778,11 @@ async function concludeAnswer(tx, runtime, live, boundary, answer, continuation,
          const user = { role: "user", content: continues, timestamp: runtime.now() };
          await tx.appendEntry(UserEntry, conversationId, { model: [user] });
          // The continuation starts the run's turn count over: bounding `onYield` loops is the extension's job.
@@ -135,21 +138,21 @@ index 56f3055..6390736 100644
          handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
          delete live.generation;
          return result;
-@@ -1058,8 +1073,12 @@ async function endToolRound(runtime, assistant, tools, taskTerminates, context)
+@@ -1058,8 +1076,12 @@ async function endToolRound(runtime, assistant, tools, taskTerminates, context)
              else {
                  delete live.tools;
                  delete live.nestedTools;
 -                if (live.run?.taskId === runtime.taskId)
 +                if (live.run?.taskId === runtime.taskId) {
                      live.run.inputs.push(...users);
-+                    // Joined input never answers on the run's override: the rest of the run uses the stored agent.
-+                    if (users.length > 0)
++                    // Joined input, or a handoff's new context, never answers on the run's override: the rest of the run uses the stored agent.
++                    if (users.length > 0 || handoff !== undefined)
 +                        delete live.run.override;
 +                }
                  handOver(live, runtime.taskId, await createGeneration(tx, conversationId));
              }
          }
-@@ -1080,9 +1099,9 @@ async function appendAssistant(tx, conversationId, message) {
+@@ -1080,9 +1102,9 @@ async function appendAssistant(tx, conversationId, message) {
   * keeps its failure.
   */
  export async function startRun(tx, conversationId, live, run, options) {

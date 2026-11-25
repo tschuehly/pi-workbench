@@ -39,6 +39,9 @@ type Policy = { models: Record<string, { provider: string; model: string }>; tie
 const POLICY = JSON.parse(readFileSync(new URL("../../../skills/model-orchestration/references/routing-policy.json", import.meta.url), "utf8")) as Policy;
 const ids = (names: readonly string[]) => names.map((name) => POLICY.models[name]!.model);
 
+/** A light tier model (the cheap wake's and a summary writer's tier). */
+export const light = (own: ModelRef) => ids(POLICY.tiers.light ?? []).includes(own.modelId);
+
 /** A strong, standard or reserve tier model: one a light model is cheaper than. */
 export const heavy = (own: ModelRef) => [...ids(POLICY.tiers.strong ?? []), ...ids(POLICY.tiers.standard ?? []), ...ids(POLICY.reserve)].includes(own.modelId);
 
@@ -56,8 +59,10 @@ export function cheapModel(own: ModelRef, available: readonly { provider: string
 async function eligible(tx: Tx, id: ConversationId, draft: InputSubmissionDraft): Promise<ModelRef | undefined> {
 	// A known request was admitted (and its turn decided) before: resubmit unchanged, which writes nothing.
 	if (draft.requestId !== undefined && (await tx.submissionByRequest(id, draft.requestId)) !== undefined) return undefined;
-	// Idle with an empty inbox: the wake's input starts its own run at once, which the override needs.
-	if ((await tx.doc(LiveDoc, id)).run !== undefined || (await tx.doc(InboxDoc, id)).items.length > 0) return undefined;
+	// Idle with an empty inbox: the wake's input starts its own run at once, which the override needs. No compaction
+	// active, checked in this commit: a timer summary still in flight after a /compact finished keeps the own model.
+	const live = await tx.doc(LiveDoc, id);
+	if (live.run !== undefined || (live.compactions?.length ?? 0) > 0 || (await tx.doc(InboxDoc, id)).items.length > 0) return undefined;
 	const newest = (await tx.scanEntries({ conversationId: id }, 20)).items.find((entry) => entry.model !== undefined && entry.model.length > 0);
 	if (newest?.kind !== CompactionEntry.kind) return undefined;
 	const own = (await tx.doc(AgentDoc, id)).model;
@@ -83,11 +88,18 @@ export async function submitWake(conversation: Conversation, draft: InputSubmiss
 	}, context);
 }
 
-/** A reopened host resumes a cheap run on the stored model: its override is dropped before anything is scheduled. */
+/**
+ * A reopened host resumes a cheap run on the stored model: its override is dropped before anything is scheduled.
+ * Except once this round's hand_back committed its receipt and rerun: the override stays so that call still resolves,
+ * replays its receipt and ends the run (no request of the run follows a terminating round); the rerun is on the own model.
+ */
 export async function dropOverride(conversation: Conversation): Promise<void> {
 	await conversation.commit(async (tx) => {
 		const live = await tx.doc(LiveDoc, conversation.id);
-		if (live.run?.override !== undefined) delete live.run.override;
+		const run = live.run;
+		if (run?.override === undefined) return;
+		const handedBack = Object.values((await tx.doc(CheapWakeDoc, conversation.id)).handedBack).some((entry) => entry.run === Number(run.taskId));
+		if (!(handedBack && live.tools !== undefined)) delete run.override;
 	}, context);
 }
 
