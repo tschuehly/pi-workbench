@@ -115,11 +115,15 @@ not silently lower it. Owner direction, repository policy, or task consequences 
 stronger evidence. If the selected evidence cannot be produced, report the gap rather than claim
 it was satisfied. Independent scrutiny does not replace automated proof.
 
-With `Challenge` and Attention `Focused`, `Switching` or `AFK`, the agent decides a design choice that
-is reversible and inside the agreed goal itself with an advisor (Sol, high), records the choice, the
-advice and how to undo it in the Workstream's DECISIONS file, and continues; it asks Thomas only when
-a choice changes the goal, the scope or a success check, or cannot be undone (Thomas, 25 Nov 2026;
-`CHALLENGE_DECIDES` in `extensions/working-mode/rules.mts`).
+With `Challenge`, under every Attention value and once any confirmation the Alignment value requires
+is reached, the agent decides a design choice that is reversible and inside the agreed goal itself
+with an advisor (Sol, high), records the choice, the advice and how to undo it in the Workstream's
+DECISIONS file, and continues. A choice that changes the goal, the scope or a success check, or
+cannot be undone, stays Thomas's: the agent asks him through the channel its Attention value uses for
+questions, and while `AFK` it does not contact him but lists the question for his return, pauses only
+the work it affects and continues independent work. While AFK still waits for alignment, its
+preparation asks every foreseeable question instead; the rule starts with AFK (Thomas, 25 Nov 2026;
+`challengeDecides` in `extensions/working-mode/rules.mts`).
 
 Use [model-orchestration](../../skills/model-orchestration/SKILL.md) for independent routing.
 Existing consequence-based checking requirements remain in effect; this redesign does not replace

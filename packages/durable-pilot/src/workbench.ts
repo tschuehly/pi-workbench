@@ -172,7 +172,7 @@ const alignmentTools: ToolRegistration[] = [
 				const doc = await tx.doc(WorkingModeDoc, api.conversationId);
 				const wasPending = afkPending(doc.selected, doc.aligned);
 				doc.aligned = true;
-				return { text: alignmentReachedText(wasPending), alignment: doc.selected.alignment };
+				return { text: alignmentReachedText(wasPending, doc.selected), alignment: doc.selected.alignment };
 			}, c);
 			return { output: text(result.text), details: { alignment: result.alignment, agreement: args.agreement } };
 		},

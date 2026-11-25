@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
-import workingMode, { axes, defaults, renderBlock, CHALLENGE_DECIDES, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
+import workingMode, { axes, defaults, renderBlock, alignmentReachedText, ALIGNMENT_TOOL, ALIGNMENT_RESET_TOOL, AFK_BATTERY_WARNING, AFK_CLOSE_PROMPT, BACK_PROMPT, openAsks } from "./index.ts";
 
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,7 +22,8 @@ writeFileSync(join(bin, "pgrep"), "#!/bin/sh\nexit 1\n");
 for (const name of ["pmset", "afplay", "say", "osascript", "pgrep"]) chmodSync(join(bin, name), 0o755);
 process.env.PATH = `${bin}:${process.env.PATH}`;
 
-const cwd = "/tmp/working-mode-test";
+// A fresh private folder: a fixed /tmp path is unwritable inside the write fence and could be a planted link.
+const cwd = mkdtempSync(join(process.env.PI_TMP ?? tmpdir(), "working-mode-test-"));
 const agentDir = `${cwd}/agent`;
 
 // A real Pi session with a scripted model: records every request the model receives.
@@ -457,13 +458,29 @@ test("every non-starting value has guidance; starting values render none", () =>
   }
 });
 
-test("Challenge with Focused, Switching or AFK lets the agent decide reversible design choices with an advisor; other combinations do not", () => {
+test("Checking Challenge: after any required confirmation the agent decides reversible in-goal design choices with an advisor, under every Attention; the rest stays Thomas's", () => {
+  const decides = /Once any confirmation your Alignment setting requires is reached, decide a design choice that is reversible and inside the agreed goal yourself with an advisor \(`openai\/gpt-6\.2-sol`, high\) instead of asking Thomas: record the choice, the advice and how to undo it in the Workstream's DECISIONS file, and continue\./;
+  const keeps = /A choice that changes the goal, the scope or a success check, or cannot be undone, stays Thomas's: /;
   for (const attention of Object.keys(axes.attention.values)) {
     for (const checking of Object.keys(axes.checking.values)) {
       const block = renderBlock({ ...defaults, attention, checking }, 1, true);
-      assert.equal(block.includes(CHALLENGE_DECIDES), checking === "Challenge" && ["Focused", "Switching", "AFK"].includes(attention), `${attention}+${checking}`);
+      const on = checking === "Challenge";
+      assert.equal(decides.test(block), on, `${attention}+${checking}`);
+      assert.equal(keeps.test(block), on, `${attention}+${checking}`);
+      if (!on) continue;
+      // AFK never contacts Thomas; every other Attention asks him through its own channel.
+      if (attention === "AFK") {
+        assert.match(block, /stays Thomas's: do not contact him: list it for his return, pause only the work it affects and continue independent work\./);
+        assert.doesNotMatch(block, /stays Thomas's: ask him/);
+      } else assert.match(block, /stays Thomas's: ask him through the channel your Attention setting uses for questions/, attention);
     }
   }
+  // While AFK waits for alignment, its preparation asks every foreseeable question; the rule starts with AFK itself.
+  const waiting = { ...defaults, alignment: "Align", attention: "AFK", checking: "Challenge" };
+  assert.doesNotMatch(renderBlock(waiting, 1, false), decides);
+  assert.match(renderBlock(waiting, 1, true), decides);
+  assert.match(alignmentReachedText(true, waiting), decides);
+  assert.doesNotMatch(alignmentReachedText(true, { ...waiting, checking: "Test" }), decides);
 });
 
 test("the terminal picker changes one axis; cancel changes nothing", async () => {
