@@ -93,6 +93,10 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   access does (the withdrawn removal host operation could be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
+- **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,
+  bound in durable-pilot's `extensions.ts`): the grants its commands would get, links resolved, plus nothing inside a
+  `.git/objects` folder. `/full-access` lifts it for the lead as for its commands; a host already inside a fence leaves
+  its tools to the outer one.
 - A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).
 - **Known limit:** `swift build` fails inside the fence (it nests its own sandbox, writes `~/.swiftpm` and the
   per-user temp folder it gets from macOS, not `TMPDIR`); a Chat that builds Swift uses full access.

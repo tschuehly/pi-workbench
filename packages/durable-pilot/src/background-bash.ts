@@ -21,6 +21,7 @@ import { createBashTool } from "@earendil-works/pi-durable/tools";
 import { AgentDoc, type Conversation, type ConversationId, defineExtension, defineTool, type DocumentReader, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
+import { alreadyFenced, fenced, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { ChildDoc, DelegationDoc } from "./delegation.ts";
@@ -391,6 +392,17 @@ export class BackgroundBash {
 		if (!(await confirm(text))) return { type: "done", message: "Full access stays off: the confirmation dialog was not answered with Allow." };
 		this.#fullAccess = true;
 		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat's host stops." };
+	}
+
+	/**
+	 * Why a write or edit tool call of `conversationId` may not write `path`: the write fence its commands run in, lifted
+	 * where they run unfenced (the lead under /full-access, no fence on this machine, or a host already inside one).
+	 */
+	async writeRefusal(path: unknown, cwd: string, conversationId: ConversationId): Promise<string | undefined> {
+		const rootId = this.#options.rootId();
+		if (!fenced() || (conversationId === rootId && this.#fullAccess) || alreadyFenced()) return undefined;
+		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId, cwd }) };
+		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env })) as string | undefined;
 	}
 
 	async status(): Promise<Record<string, string>> {

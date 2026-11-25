@@ -8,7 +8,7 @@ import { dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, grants, ownedWorktrees, workstreamId, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -387,6 +387,25 @@ test("pnpm 12's lock folder: XDG_RUNTIME_DIR is one user-only folder outside the
   assert.equal(fencedEnv({ XDG_RUNTIME_DIR: "/tmp" }, fake, undefined).XDG_RUNTIME_DIR, undefined, "nor an inherited one");
   const g = grants({ cwd: fake, home: fake });
   assert.ok(g.write.includes(runtime) && g.locked.includes(runtime), "contents writable, the folder itself locked");
+});
+
+// Runs inside a fence too: it only computes the grants and resolves paths, on a fake home.
+test("file-edit tools: a path is writable exactly where the Chat's commands could write it", async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "edit-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(app, { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  const outside = mkdtempSync(join(root, "edit-outside-"));
+  symlinkSync(outside, join(app, "link-out"));
+  symlinkSync(join(app, "gone"), join(app, "dangling"));
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  mkdirSync(env.PI_TMP, { recursive: true });
+  const refusal = (path) => writeRefusal(path, { cwd: app, sessionId: "edit-test", env });
+  for (const path of ["src/new/file.ts", "@README.md", join(app, "link-out", "..", "x"), join(env.PI_TMP, "x")]) assert.equal(await refusal(path), undefined, path);
+  const refused = [join(fake, "elsewhere"), "~/elsewhere", "../app.other/x", "AGENTS.md", ".pi/settings.json", ".git/hooks/pre-commit", ".git/config", ".git/objects/ab/cdef", "link-out/x", "dangling", join(outside, "x")];
+  for (const path of refused) assert.match(await refusal(path) ?? "", /^Blocked: .* outside this Chat's write folders/, path);
+  assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
+  assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
 });
 
 test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {

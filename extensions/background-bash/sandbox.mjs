@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Absolute: never a sandbox-exec found on the command's PATH. Codex and srt crash Chromium (Thomas chose this, 24 Nov).
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -299,6 +299,53 @@ export function alreadyFenced() {
   } catch (error) { return error.code === "EPERM"; }
 }
 
+/** The grants of a job of chat `sessionId` started in `cwd` with `env` (its PI_TMP), and the owners of its worktrees. */
+async function jobGrants({ cwd: at, sessionId }, env) {
+  const home = env.HOME ?? homedir();
+  const ws = await workstreamOf(sessionId, home, env);
+  // Worktrees by Workstream only for a chat started in that Workstream's scratch folder: any chat can associate
+  // itself with any Workstream (`workstreams associate`), but not change the folder it was started in.
+  const scratchRoot = join(real(home), ".pi-workbench", "scratch");
+  const cwd = real(at);
+  const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
+  const owners = [sessionId, started].filter((id) => typeof id === "string" && id !== "");
+  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
+  return { home, owners, rules };
+}
+
+/** `path` with every link resolved as far as it exists; undefined when a link points nowhere (its target is unknown). */
+function resolved(path) {
+  const rest = [];
+  for (let at = path; ; at = dirname(at)) {
+    try { return join(realpathSync(at), ...rest.reverse()); } catch { /* not there yet */ }
+    if (present(at) || dirname(at) === at) return undefined;
+    rest.push(basename(at));
+  }
+}
+
+/**
+ * Whether the fence lets a command write the absolute `path`, by the profile's rules in their order. Stricter in one
+ * place: nothing inside git's objects folders (the fence lets commands add objects there; no file-edit tool needs to).
+ */
+export function mayWrite(path, { write, read = [], reopen = [], locked = [], history = [] }) {
+  const target = resolved(path);
+  if (target === undefined) return false;
+  const under = (roots) => roots.some((root) => target === root || inside(target, root));
+  return under(write) && (!under(read) || under(reopen)) && !locked.includes(target) && !under(history);
+}
+
+/**
+ * Why a write or edit tool of chat `sessionId`, in `cwd` with its tool environment `env`, may not write `path` (as Pi's
+ * tools resolve it: `@` dropped, `~` expanded, relative to `cwd`); undefined when its commands could write it too.
+ */
+export async function writeRefusal(path, { cwd, sessionId, env }) {
+  if (typeof path !== "string") return undefined;
+  const home = env.HOME ?? homedir();
+  const target = resolve(cwd, path.replace(/^@/, "").replace(/^~(?=$|\/)/, home));
+  if (mayWrite(target, (await jobGrants({ cwd, sessionId }, env)).rules)) return undefined;
+  return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
+}
+
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
  * write. Throws when no proven sandbox is
@@ -315,16 +362,9 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   if (!existsSync(bin)) throw new Error(`Sandbox unavailable: ${bin} is missing; the command was not run`);
   try { proven(bin, env, home); }
   catch (error) { throw new Error(`Sandbox unavailable: ${error.message}; the command was not run`); }
-  const ws = await workstreamOf(job.sessionId, home, env);
-  // Worktrees by Workstream only for a chat started in that Workstream's scratch folder: any chat can associate
-  // itself with any Workstream (`workstreams associate`), but not change the folder it was started in.
-  const scratchRoot = join(real(home), ".pi-workbench", "scratch");
-  const cwd = real(job.cwd);
-  const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
-  const owners = [job.sessionId, started].filter((id) => typeof id === "string" && id !== "");
+  const { owners, rules } = await jobGrants(job, env);
   const dataDirs = [env.PI_WEB_DATA_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
   const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
-  const rules = grants({ cwd: job.cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
   return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };

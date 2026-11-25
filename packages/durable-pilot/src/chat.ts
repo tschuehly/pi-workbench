@@ -241,7 +241,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const extensions: Extension[] = [
 		chatTools(() => workbench.resources, options.cwd),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
-		workbenchExtensions(options.cwd),
+		workbenchExtensions(options.cwd, (path, cwd, conversationId) => bash.writeRefusal(path, cwd, conversationId)),
 		checkpointExtension(() => opened!.harness, { rootId: () => opened?.root.id, workstream: () => homeWorkstream(chatId) }),
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Same runner, blocking API and a bounded lifetime for children; no async child scheduler.

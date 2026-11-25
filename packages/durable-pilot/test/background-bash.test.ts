@@ -7,9 +7,11 @@ import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
+import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
 import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -581,6 +583,39 @@ test("an explicit end refuses a bash call already past its intent commit: the la
 	} finally {
 		cp.spawn = original;
 		syncBuiltinESMExports();
+		bash.close();
+	}
+});
+
+test("write and edit tools meet the write fence of the Chat's commands: its checkout is writable, a folder outside and its git config are not; /full-access lifts it for the lead only", { skip: process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, where the host leaves its tools to the outer one; run from an unfenced shell" }, async () => {
+	const { store, cwd } = family("write-fence");
+	// Outside every grant: this account's own sandbox state, which no fence ever grants (sandbox.mjs).
+	const outside = join(userInfo().homedir, ".pi-workbench", "sandbox", `write-fence-test-${String(process.pid)}`);
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-in", text: call("write", { path: "inside.txt", content: "in" }) });
+	const written = await toolEnd(host);
+	assert.equal(written.isError, false, String(written.text));
+	await host.call("prompt", { operationId: "op-out", text: call("write", { path: outside, content: "out" }) });
+	const refused = await toolEnd(host, 2);
+	assert.equal(refused.isError, true);
+	assert.match(String(refused.text), /outside this Chat's write folders/);
+	await host.call("prompt", { operationId: "op-git", text: call("edit", { path: join(ROOT, ".git", "config"), edits: [{ oldText: "[core]", newText: "[core]\n\thooksPath = /dev/null" }] }) });
+	const git = await toolEnd(host, 3);
+	assert.equal(git.isError, true);
+	assert.match(String(git.text), /outside this Chat's write folders/);
+	await host.close();
+	assert.equal(readFileSync(join(cwd, "inside.txt"), "utf8"), "in");
+	assert.equal(existsSync(outside), false);
+	assert.doesNotMatch(readFileSync(join(ROOT, ".git", "config"), "utf8"), /hooksPath/);
+	// The owner's switch, as the dialog answers it: the lead's tools write where its commands then may, a Subagent's never.
+	const bash = new BackgroundBash({ chatId: "chat-write-fence", cwd, rootId: () => "lead" as never, root: JOBS });
+	try {
+		assert.ok(await bash.writeRefusal(outside, cwd, "lead" as never));
+		await bash.fullAccess("on", "test", async () => true);
+		assert.equal(await bash.writeRefusal(outside, cwd, "lead" as never), undefined);
+		assert.ok(await bash.writeRefusal(outside, cwd, "child" as never), "a Subagent stays fenced");
+	} finally {
 		bash.close();
 	}
 });
