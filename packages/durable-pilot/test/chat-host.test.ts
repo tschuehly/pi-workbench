@@ -1691,6 +1691,21 @@ test("request_attention persists across a kill, notifies once, and clears only b
 	await host.close();
 });
 
+test("an owner run result PI WEB delivers as a prompt (Terminal runs) leaves an open attention request open", async () => {
+	const { store, cwd } = family("attention-owner-run");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: 'call:request_attention {"reason":"Please review"}' });
+	await idle(host, 1);
+	const open = (await host.call<Status>("status")).attentionRequest;
+	assert.ok(open !== undefined);
+	// PI WEB durableChatService.ownerRun: a Terminal run's notice arrives as a follow-up prompt under an `owner-run:` operation.
+	await host.call("prompt", { operationId: "owner-run:7d1c", text: "[Owner run result] The user confirmed and ran your pi-run proposal outside the write fence.", mode: "followUp" });
+	await idle(host, 2);
+	assert.equal((await host.call<Status>("status")).attentionRequest?.id, open.id, "a machine follow-up is not the owner answering");
+	await host.close();
+});
+
 test("model switching is per Chat, persisted, and applies to the next request", async () => {
 	const { store, cwd } = family("model");
 	let host = new ChatHost(store, cwd);
