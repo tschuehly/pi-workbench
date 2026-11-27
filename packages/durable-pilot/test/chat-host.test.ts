@@ -135,7 +135,7 @@ class ChatHost {
 	}
 }
 
-type Transcript = { messages: { role: string; entryId?: string; content?: unknown; stopReason?: string; isError?: boolean }[]; partial: unknown; status: { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; warnings?: unknown[] } };
+type Transcript = { messages: { role: string; entryId?: string; content?: unknown; stopReason?: string; isError?: boolean }[]; partial: unknown; status: { isStreaming: boolean; queuedMessages: { kind: string; text: string }[]; warnings?: unknown[]; workingModeSample?: number } };
 
 const textOf = (content: unknown): string =>
 	typeof content === "string" ? content : Array.isArray(content) ? content.map((c: { text?: string }) => c.text ?? "").join("") : "";
@@ -186,7 +186,9 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
-	assert.deepEqual(await host.call("transcript", { limit: 1 }), { ...transcript, messages: transcript.messages.slice(-1), start: 3, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a hard-limited page");
+	const paged = await host.call<Transcript>("transcript", { limit: 1 });
+	// Each status read takes the next Working Mode sample number.
+	assert.deepEqual(paged, { ...transcript, status: { ...transcript.status, workingModeSample: paged.status.workingModeSample }, messages: transcript.messages.slice(-1), start: 3, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a hard-limited page");
 	await assert.rejects(host.call("transcript", { limit: -1 }), /non-negative integers/);
 	// Every turn request asks for the long prompt-cache tier.
 	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
