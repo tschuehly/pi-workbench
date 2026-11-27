@@ -114,7 +114,7 @@ if (values["read-transcript"] === true) {
 	process.exit(0);
 }
 // The Chat's backup copy (src/backup.ts): every 5 min while it changed, and on close. The family folder's name is the Chat ID.
-startBackups(host.store, chatBackupPath(basename(values.store)), (message) => process.stderr.write(`${redact(message)}\n`));
+const backups = startBackups(host.store, chatBackupPath(basename(values.store)), (message) => process.stderr.write(`${redact(message)}\n`));
 // Crash-matrix barriers (tests only): the named reporter fault windows announce themselves and stop until killed;
 // `name@ms` releases the window after that many milliseconds instead, so a race can be staged without a kill.
 const holds = new Map((process.env.PI_DURABLE_HOLD ?? "").split(",").filter(Boolean).map((hold) => {
@@ -141,7 +141,12 @@ await session.start();
 
 let closing: Promise<void> | undefined;
 /** `end` (optional on `close`): an explicit end of the Chat, which cancels its background jobs; restarts omit it. */
-const close = (end = false, upgrade = false) => (closing ??= session.close({ end, ...(upgrade ? { reason: "upgrade" as const } : {}) }));
+const close = (end = false, upgrade = false) =>
+	(closing ??= session.close({ end, ...(upgrade ? { reason: "upgrade" as const } : {}) }).catch(async (error: unknown) => {
+		// A close that fails before the store closes (e.g. unconfirmed job cleanup on end) skips the final copy; take it here.
+		if (host.store.raw.isOpen) await backups.copyNow();
+		throw error;
+	}));
 /**
  * B's close: only if the Chat may restart now, decided with input held off (`ChatSession.quiesce`); else a refusal.
  * Past the quiet check the session admits nothing, so a close that fails or outlives its deadline must not leave a host

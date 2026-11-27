@@ -2,7 +2,7 @@
 // of its source read on the owning connection at the copy's instant.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
@@ -134,4 +134,26 @@ test("the chat host copies its store into PI_WORKBENCH_BACKUP_DIR/chats/<chat id
 	process.env.PI_WORKBENCH_BACKUP_DIR = root;
 	assert.equal(chatBackupPath("family"), destination);
 	process.env.PI_WORKBENCH_BACKUP_DIR = prior;
+});
+
+test("a Chat end that fails on unconfirmed job cleanup still takes the final copy", async () => {
+	const { store, cwd } = family("backup-end");
+	const root = scratch("backup-end-root");
+	const jobs = join(scratch("backup-end-jobs"), "jobs");
+	// An owned job of this Chat whose runner recorded a surviving process: ending the Chat cannot confirm its cleanup.
+	const job = join(jobs, "stuck");
+	mkdirSync(job, { recursive: true });
+	const now = Date.now();
+	writeFileSync(join(job, "job.json"), JSON.stringify({ sessionId: store, owned: true, command: "true", cwd, startedAt: now, expiresAt: now + 60_000 }));
+	writeFileSync(join(job, "exit"), JSON.stringify({ exitCode: 0, finishedAt: now, cleanup: { survivors: [1] } }));
+	const host = new ChatHost(store, cwd, { env: { PI_WORKBENCH_BACKUP_DIR: root, PI_BACKGROUND_BASH_ROOT: jobs } });
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "after the open copy" });
+	await host.idle(1);
+	await assert.rejects(host.call("close", { end: true }), /cleanup could not be confirmed/);
+	host.child.kill("SIGTERM");
+	assert.equal(await host.exited, 1);
+	const destination = join(root, "chats", "family", "session.sqlite");
+	assert.deepEqual(walkFile(destination), walkFile(join(store, "session.sqlite")), host.stderr);
+	assert.doesNotMatch(host.stderr, /chat backup .* failed/);
 });
