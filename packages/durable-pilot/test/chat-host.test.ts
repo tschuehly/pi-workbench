@@ -12,7 +12,7 @@ import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
 import { context } from "../src/host.ts";
-import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
+import { QuestionsDoc, questionsState, WorkingModeDoc, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
@@ -341,7 +341,7 @@ type Status = Transcript["status"] & {
 };
 type Logged = { label: string; workingMode?: number; sections?: string[]; images?: number };
 const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
-const mode = (status: Status) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
+const mode = (status: Pick<Status, "extensionStatuses">) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
 const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
 
 const ASK = {
@@ -560,6 +560,43 @@ async function quietChat(label: string) {
 	await session.start();
 	return { h, store, session, runs, settled };
 }
+
+test("Working Mode: a held status cannot report the branch retired by navigation", async (t) => {
+	const { h, session, settled } = await quietChat("held-mode");
+	const release = Promise.withResolvers<void>();
+	try {
+		await session.prompt({ operationId: "first", text: "first" });
+		await settled(1);
+		const earlier = await session.tree();
+		assert.ok(earlier.type === "tree" && earlier.activeLeafId);
+		await session.mode("alignment align");
+		await session.prompt({ operationId: "second", text: "second" });
+		await settled(2);
+		const later = await session.tree();
+		assert.equal(later.type, "tree");
+		const started = Promise.withResolvers<void>();
+		const snapshot = h.harness.snapshot.bind(h.harness);
+		const held = t.mock.method(h.harness, "snapshot", async (...args: Parameters<typeof snapshot>) => {
+			const value = await snapshot(...args);
+			if (Object.is(args[0], WorkingModeDoc)) {
+				held.mock.restore();
+				started.resolve();
+				await release.promise;
+			}
+			return value;
+		});
+		const delayed = session.status();
+		await started.promise;
+		await session.navigate({ targetId: earlier.activeLeafId, expectedLeafId: later.activeLeafId });
+		const active = await session.status();
+		assert.equal(mode(active).selected.alignment, "Default");
+		release.resolve();
+		assert.equal(mode(await delayed).selected.alignment, "Default");
+	} finally {
+		release.resolve();
+		await session.close();
+	}
+});
 
 test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
 	const { h, store, session, settled } = await quietChat("back");

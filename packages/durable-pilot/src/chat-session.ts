@@ -709,7 +709,9 @@ export class ChatSession {
 
 	async status(): Promise<ChatStatus> {
 		const { harness, root } = this.#host;
-		const [inbox, usage, agent] = await Promise.all([
+		const workingModeSample = ++this.#modeSamples;
+		const [mode, inbox, usage, agent] = await Promise.all([
+			workingModeSnapshot(harness, root),
 			harness.snapshot(InboxDoc, root.id, context),
 			harness.snapshot(UsageDoc, root.id, context),
 			root.agent(context),
@@ -732,8 +734,10 @@ export class ChatSession {
 		const warnings = paused
 			? [{ severity: "info" as const, message: `Restored paused: unfinished work waits until you send a message.${this.#partial === undefined ? "" : ` ${INTERRUPTED}`}` }]
 			: [];
-		// Numbered as the snapshot resolves: snapshots resolve in the order they read, so a higher number never carries an older mode.
-		const [[mode, workingModeSample], questions, reconcile, delegates] = await Promise.all([workingModeSnapshot(harness, root).then((snapshot) => [snapshot, ++this.#modeSamples] as const), questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context)]);
+		const [questions, reconcile, delegates, bash] = await Promise.all([
+			questionsState(harness, root), harness.snapshot(Reconcile, context), roster(harness, root.id, context), this.#chat?.bash?.status(),
+		]);
+		if (root !== this.#host.root) return this.status();
 		const pendingAsks = Object.values(questions.open).sort((a, b) => a.askedAt.localeCompare(b.askedAt));
 		const unresolvedEffects = Object.entries(reconcile?.uncertain ?? {})
 			.filter(([, item]) => item.resolved === undefined && item.conversationId === root.id)
@@ -761,7 +765,7 @@ export class ChatSession {
 				[WORKING_MODE_CUSTOM_TYPE]: JSON.stringify(mode),
 				...(delegates === undefined ? {} : { [ACTIVITY_STATUS_KEY]: delegates }),
 				...(this.#chat?.fast.active(agent.model && { provider: agent.model.provider, id: agent.model.modelId }) ? { [FAST_STATUS]: "fast" } : {}),
-				...(await this.#chat?.bash?.status()),
+				...bash,
 				...this.#chat?.atelier?.status(),
 			},
 			workingModeSample,
