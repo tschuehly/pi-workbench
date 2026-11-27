@@ -241,11 +241,17 @@ test("P064 only offers spawn_session while PI WEB enables it, without changing t
 	assert.ok((await probe(5, "enabled again")).includes("spawn_session"));
 	await host.close();
 
+	// A reopened host keeps the last offered tools until PI WEB's settings arrive (dropping and re-adding them would
+	// reorder the tools and lose the prompt cache); until then the tool refuses to run.
 	host = new ChatHost(store, cwd);
 	await host.ready;
-	await host.call("prompt", { operationId: "op-6", text: "before daemon config" });
-	await host.idle(1);
-	assert.ok(!logged(store).find((request) => request.label === "before daemon config")!.tools!.includes("spawn_session"));
+	const early = await probe(1, call("spawn_session", { prompt: "before daemon config" }));
+	assert.ok(early.includes("spawn_session"));
+	const refused = await host.until(isResult("spawn_session"), "the refused call before configure");
+	assert.equal((refused.message as Message).isError, true);
+	assert.ok(!host.events.some((e) => e.type === "durable.spawn"));
+	await host.call("configure", { resources: {}, spawnSessions: false });
+	assert.ok(!(await probe(2, "disabled after reopen")).includes("spawn_session"));
 	await host.close();
 });
 
