@@ -181,7 +181,7 @@ for (const owned of [false, true]) {
   });
 }
 
-test("`wt switch --create` makes the sibling worktree outside the fence and records its owner; --execute and a repo outside ~/IdeaProjects are refused", { skip }, async () => {
+test("`wt switch --create` makes the `<repo>.worktrees/<branch>` worktree outside the fence (also from inside one) and records its owner; --execute and a repo outside ~/IdeaProjects are refused", { skip }, async () => {
   // Its own repo: the rm -rf test above empties the shared one's .git, as it may inside the grant.
   const tools = join(home, "IdeaProjects", "tools");
   mkdirSync(tools);
@@ -191,17 +191,19 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   const planted = join(piTmp, "planted");
   const job = await run([
     'wt switch --create made-by-host --no-cd; echo "exit=$?"',
+    `(cd "${join(home, "IdeaProjects", "tools.worktrees", "made-by-host")}" && wt switch --create nested --no-cd); echo "nested=$?"`,
     'wt switch --create other -x "touch $HOME/escaped"; echo "exit=$?"',
     `git init -q "${planted}" && printf '#!/bin/sh\ntouch "$HOME/escaped"\n' > "${planted}/hook" && chmod +x "${planted}/hook" && git -C "${planted}" config core.hooksPath "${planted}" && cd "${planted}" && wt switch --create from-planted; echo "exit=$?"`,
   ].join("; "), { cwd: tools, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
-  const tree = join(home, "IdeaProjects", "tools.made-by-host");
+  const tree = join(home, "IdeaProjects", "tools.worktrees", "made-by-host");
   assert.ok(existsSync(join(tree, ".git")), out);
+  assert.ok(out.includes("nested=0") && existsSync(join(home, "IdeaProjects", "tools.worktrees", "nested", ".git")), out);
   assert.match(out, /exit=0[\s\S]*-x is not available inside the sandbox[\s\S]*exit=2[\s\S]*run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
-  const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-owner.json"), "utf8"));
+  const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "made-by-host", "pi-owner.json"), "utf8"));
   assert.deepEqual([record.branch, record.sessions], ["made-by-host", ["sandbox-test"]]);
-  const receipt = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-creator.json"), "utf8"));
+  const receipt = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "made-by-host", "pi-creator.json"), "utf8"));
   assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["made-by-host", ["sandbox-test"], []], "a creation receipt beside the cleanup record");
   assert.equal(existsSync(join(home, "owner-script-ran")), false, "no owner-record script ran");
   assert.equal(existsSync(join(home, "escaped")), false);

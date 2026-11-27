@@ -134,6 +134,6 @@ export function warnTmpBash(command) {
   if (typeof command !== "string") return;
   const warnings = [];
   if (BASH_TMP.test(command)) warnings.push(`Warning: this command uses /tmp. ${useInstead()}`);
-  if (GIT_WORKTREE_ADD.test(command)) warnings.push("Warning: create worktrees with `wt switch --create <branch>` (sibling <repo>.<branch>, runs project hooks), not `git worktree add`.");
+  if (GIT_WORKTREE_ADD.test(command)) warnings.push("Warning: create worktrees with `wt switch --create <branch>` (into <repo>.worktrees/<branch>, runs project hooks), not `git worktree add`.");
   return warnings.join(" ") || undefined;
 }

@@ -67,7 +67,9 @@ function mainCheckout(cwd, home, env) {
   const projects = real(join(home, "IdeaProjects"));
   const at = real(cwd);
   if (!inside(at, projects)) return undefined;
-  const top = join(projects, relative(projects, at).split(sep)[0]);
+  const [first, second] = relative(projects, at).split(sep);
+  // Linked worktrees live in `<repo>.worktrees/<branch>` (worktrunk's worktree-path in tschuehly-config).
+  const top = first.endsWith(".worktrees") && second !== undefined ? join(projects, first, second) : join(projects, first);
   let common;
   try { common = real(execFileSync("git", ["-C", top, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", env, timeout: 5000 }).trim()); } catch { return undefined; }
   const main = dirname(common);
@@ -79,7 +81,7 @@ function mainCheckout(cwd, home, env) {
   return { main, common };
 }
 
-/** `wt switch --create` as worktrunk's default layout makes it (`<repo>.<branch>` beside the main checkout), via git. */
+/** `wt switch --create` as worktrunk's configured layout makes it (`<repo>.worktrees/<branch>` beside the main checkout), via git. */
 async function createWorktree({ branch, base }, cwd, env, owners) {
   const home = env.HOME ?? homedir();
   const repo = mainCheckout(cwd, home, env);
@@ -89,7 +91,7 @@ async function createWorktree({ branch, base }, cwd, env, owners) {
   if ((await git(["check-ref-format", "--branch", branch])).code !== 0 || branch.startsWith("-")) return fail(`wt switch --create: ${branch} is not a valid branch name`);
   if ((await git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0) return fail(`wt switch --create: branch ${branch} already exists`);
   if (base !== undefined && (await git(["rev-parse", "--verify", "--quiet", `${base}^{commit}`])).code !== 0) return fail(`wt switch --create: base ${base} is not a commit`);
-  const path = join(dirname(repo.main), `${basename(repo.main)}.${branch.replace(/[\\/]/g, "-")}`);
+  const path = join(dirname(repo.main), `${basename(repo.main)}.worktrees`, branch.replace(/[\\/]/g, "-"));
   try { lstatSync(path); return fail(`wt switch --create: ${path} already exists`); } catch { /* free */ }
   const added = await git(["worktree", "add", "-b", branch, path, ...(base === undefined ? [] : [base])]);
   if (added.code !== 0) return added;

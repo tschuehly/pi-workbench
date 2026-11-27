@@ -84,7 +84,7 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   jobs' host-operation sockets, and Apple events.
 - **Host operations** (`host-ops.mjs`): shims first on the fenced PATH forward `workstreams` (no `@file` arguments) and
   `wt switch --create <branch> [--base <ref>]` to the job's runner, which runs them outside the fence with its own
-  environment; the worktree is created with git in the main checkout under `~/IdeaProjects`, and the runner writes its
+  environment; the worktree is created with git in `<repo>.worktrees/<branch>` beside the main checkout under `~/IdeaProjects`, and the runner writes its
   cleanup owner record (`pi-owner.json`) and its creation receipt (`pi-creator.json`: the creating chat and only the
   Workstream whose scratch folder it started in). Only the receipt grants access: the cleanup record accumulates owners
   (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
