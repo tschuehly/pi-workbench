@@ -354,13 +354,18 @@ test("a chat in its scratch folder may write the worktrees whose creation receip
   assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["from-ws", ["sandbox-test"], ["ws-x"]]);
 });
 
-test("fenced `wt remove` removes a pushed, clean worktree outside the fence with its git filters fenced, and refuses an unpushed one", { skip }, async () => {
+// Needs full access: from inside a fence `narrowed` adds nothing, so the filter check below would prove nothing.
+test("fenced `wt remove` moves a pushed, clean worktree to the trash outside the fence with its git filters fenced, and refuses an unpushed one", { skip }, async () => {
   const origin = join(root, "pushed-origin.git");
   const app = join(home, "IdeaProjects", "pushed");
   git(root, "init", "-q", "--bare", origin);
   git(root, "clone", "-q", origin, app);
   git(app, "commit", "-q", "--allow-empty", "-m", "init");
-  git(app, "push", "-q", "origin", "HEAD");
+  git(app, "push", "-q", "origin", "HEAD:refs/heads/main");
+  // GitHub by URL, the bare repo for pushes; a fake gh answers GitHub's compare API from that bare repo.
+  git(app, "remote", "set-url", "origin", "https://github.com/acme/pushed.git");
+  git(app, "remote", "set-url", "--push", "origin", origin);
+  writeFileSync(join(fakeBin, "gh"), `#!/bin/sh\ncase "$2" in\n  repos/acme/pushed) echo main ;;\n  */compare/*) bh=\${2#*/compare/}; b=\${bh%...*}; sha=\${bh##*...}\n    git -C "${origin}" cat-file -e "$sha^{commit}" 2>/dev/null && git -C "${origin}" merge-base --is-ancestor "$sha" "refs/heads/$b" 2>/dev/null && echo behind || echo ahead ;;\n  *) exit 1 ;;\nesac\n`, { mode: 0o755 });
   const done = join(home, "IdeaProjects", "pushed.worktrees", "done");
   const unpushed = join(home, "IdeaProjects", "pushed.worktrees", "unpushed");
   git(app, "worktree", "add", "-q", "-b", "done", done);
@@ -375,7 +380,7 @@ test("fenced `wt remove` removes a pushed, clean worktree outside the fence with
   git(done, "commit", "-q", "-m", "done");
   git(done, "push", "-q", "origin", "done");
   git(unpushed, "commit", "-q", "--allow-empty", "-m", "local only");
-  // Files an hour old (no Chat active there); a.txt is then stat-dirty, so git status runs the filter: unfenced it escapes.
+  // Files an hour old: a.txt is then stat-dirty, so git status runs the filter: unfenced it escapes.
   const then = new Date(Date.now() - 3600_000);
   const age = () => { for (const p of execFileSync("find", [done, unpushed, join(app, ".git", "worktrees")], { encoding: "utf8" }).trim().split("\n")) utimesSync(p, then, then); };
   age();
@@ -387,9 +392,10 @@ test("fenced `wt remove` removes a pushed, clean worktree outside the fence with
   const job = await run(`wt remove done; echo "exit=$?"; wt remove unpushed; echo "exit=$?"`, { cwd: app, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
-  assert.match(out, /✓ Removed worktree [^\n]*pushed\.worktrees\/done; deleted branch done \(same as origin\/done\)\nexit=0/, out);
-  assert.match(out, /wt remove: refused: its head [0-9a-f]{12} is on no branch of origin; push it first; nothing was removed\nexit=2/, out);
+  assert.match(out, /✓ Moved worktree [^\n]*pushed\.worktrees\/done and its git folder to [^\n]*\.pi-workbench\/trash\/[^\n]*; branch done kept\nexit=0/, out);
+  assert.match(out, /wt remove: refused: commit [0-9a-f]{12} of its HEAD history is on no branch of github\.com\/acme\/pushed; push it first; nothing was removed\nexit=2/, out);
   assert.equal(existsSync(done), false);
+  assert.equal(readdirSync(join(home, ".pi-workbench", "trash")).length, 1);
   assert.ok(existsSync(join(unpushed, ".git")));
   assert.equal(existsSync(sentinel), false, "the filter ran only inside the narrowed fence");
 });

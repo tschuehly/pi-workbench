@@ -112,7 +112,7 @@ export function ownedWorktrees(home, owners) {
 function limits(home) {
   const pw = join(home, ".pi-workbench");
   const scratchRoot = join(pw, "scratch");
-  const never = [join(home, ".pi"), join(home, ".pi-web-durable"), join(pw, "installed"), join(pw, "installed-durable"), join(pw, "workstreams"), join(pw, "background-bash"), join(pw, "sandbox")];
+  const never = [join(home, ".pi"), join(home, ".pi-web-durable"), join(pw, "installed"), join(pw, "installed-durable"), join(pw, "workstreams"), join(pw, "background-bash"), join(pw, "sandbox"), join(pw, "trash")];
   const grantable = (dir) => inside(dir, home) && ![join(home, "IdeaProjects"), pw, scratchRoot, join(pw, "tmp")].includes(dir) && !never.some((n) => dir === n || inside(dir, n));
   return { pw, scratchRoot, grantable };
 }
@@ -507,7 +507,7 @@ function unreachable(env, home) {
 }
 
 /**
- * `argv` for a host operation's own program on an agent's files (git status, worktree removal), fenced to write only
+ * `argv` for a host operation's own program on an agent's files (git status, the .scratch copy), fenced to write only
  * `write`: a folder swapped for a link mid-way, or a git filter script in the checkout, reaches nothing beyond. As is
  * when already inside a fence (the outer one holds); throws when no proven sandbox is available.
  */

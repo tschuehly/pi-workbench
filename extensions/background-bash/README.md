@@ -108,17 +108,23 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
   Inside the fence the real `wt` runs only `list`, `switch` and `config` (global options in exact forms only), so no
   `wt merge`, `step prune` or alias half-empties a worktree.
-  `wt remove [path|branch]` (no flags, one target) goes to the runner, which removes a linked worktree of a checkout
-  under `~/IdeaProjects`, whoever made it (Thomas, 27 Nov: pushed worktrees are removable by anyone), only when: its
-  git links agree and it is not locked or the main checkout; no path component is a link (checked again right before);
-  after `git fetch origin` its head is on an `origin/*` branch; `git status` shows nothing but a top-level
-  `node_modules` and `.scratch/`; it is not this Chat's folder, no running command works in it, and nothing in it or its
-  git metadata changed in the last 10 minutes (open Chats' folders cannot be detected reliably). `.scratch/` first moves
-  to `~/.pi-workbench/scratch/<ws>/rescued-<branch>-<date>/` (the Workstream from `pi-creator.json` or
-  `pi-owner.json`; none: refused). `git status`, the moves and `git worktree remove` (never `--force`) run under a
-  fence that writes only the worktree and its git folder, so a folder swapped for a link or a git filter script in the
-  checkout reaches nothing else. The branch goes only if merged into origin's default branch or equal to its origin
-  branch. Each refusal names its reason.
+  `wt remove [path|branch]` (no flags, one target) goes to the runner, which moves a linked worktree of a checkout
+  under `~/IdeaProjects` to the trash, whoever made it (Thomas, 27 Nov: pushed worktrees are removable by anyone), only
+  when: its git links agree and it is not locked or the main checkout; no path component is a link; origin's URL (read
+  from `<repo>/.git/config` alone, which no fence lets a command write) is a github.com repository, and `gh api
+  …/compare` says its head and every commit in its HEAD reflog are on origin's default branch or its own branch (no
+  `git fetch`, no remote-tracking ref: commands can write those); `git status --ignored` shows nothing but a top-level
+  `node_modules` and `.scratch/`, and no file is assume-unchanged or skip-worktree; it is not this Chat's folder, no
+  running command works in it, and no Durable Chat's stored folder (`fence-folder.json` in each store under
+  `~/.pi-web-durable/durable/`; an unreadable one refuses) lies in it or around it. `.scratch/` is copied to
+  `~/.pi-workbench/scratch/<ws>/rescued-<branch>-<date>/` (the Workstream from `pi-creator.json` or `pi-owner.json`;
+  none: refused). Then, after the location and head are checked again, the worktree and its git folder are renamed (same
+  volume, else refused) to `~/.pi-workbench/trash/<UTC time>-<repo>-<name>/{tree,gitdir}` with a `restore.json`;
+  nothing is deleted and the branch stays. No fence grants the trash. Thomas runs, unfenced,
+  `node scripts/fence-trash.mjs --list`, `--restore <id>` (renames both back, then `git worktree repair`) or
+  `--empty-older-than 14d`. `git status`, `git ls-files` and the `.scratch` copy run under a fence that writes only the
+  worktree's git folder (the copy: only the Workstream's scratch folder), so a git filter script in the checkout or a
+  folder swapped for a link reaches nothing else. Each refusal names its reason.
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
 - **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,

@@ -6,7 +6,7 @@
 // worktrunk's project config, not an owner-record script it could edit.
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -114,8 +114,6 @@ async function createWorktree({ branch, base }, cwd, env, owners) {
 const present = (path) => { try { return lstatSync(path); } catch { return undefined; } };
 // Real paths only: a link anywhere on the way could point the removal at another folder.
 const unlinked = (path) => { try { return realpathSync.native(path) === path; } catch { return false; } };
-const QUIET_MS = 10 * 60_000;
-
 /** The linked worktree at the real path `top` under ~/IdeaProjects, with its git folders, or why it is not one. */
 function worktreeAt(top, projects) {
   if (!unlinked(top)) return { error: `${top} does not exist or passes through a symbolic link` };
@@ -133,22 +131,6 @@ function worktreeAt(top, projects) {
   return { top, gitDir, common, main: dirname(common) };
 }
 
-/** Newest change time of anything in `dirs` (no link followed), the top-level node_modules aside. */
-function lastChange(dirs) {
-  let newest = 0;
-  const walk = (dir, top) => {
-    newest = Math.max(newest, lstatSync(dir).mtimeMs);
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (top && entry.name === "node_modules") continue;
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) walk(path, false);
-      else newest = Math.max(newest, lstatSync(path).mtimeMs);
-    }
-  };
-  for (const dir of dirs) walk(dir, true);
-  return newest;
-}
-
 /** Folders of background commands still running (any Chat's), as their job records name them. */
 function runningFolders(home) {
   const jobs = join(home, ".pi-workbench", "background-bash", "jobs");
@@ -158,16 +140,71 @@ function runningFolders(home) {
     try {
       if (present(join(jobs, id, "exit"))) return [];
       const job = JSON.parse(readFileSync(join(jobs, id, "job.json"), "utf8"));
-      return Date.now() < job.expiresAt && typeof job.cwd === "string" ? [real(job.cwd)] : [];
+      return Date.now() < job.expiresAt ? [job.cwd, job.folder].filter((f) => typeof f === "string").map(real) : [];
     } catch { return []; }
   });
 }
 
+const readText = (path) => { try { return readFileSync(path, "utf8"); } catch { return undefined; } };
+const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
 /**
- * `wt remove [path|branch]`: removes a linked worktree under ~/IdeaProjects only if its head is on origin (after a
- * fetch), it is clean but for a top-level node_modules and .scratch/, and no Chat seems to work in it; .scratch/ goes
- * to the owning Workstream's scratch folder first. The branch goes only if merged into origin's default or equal to
- * its origin branch. Everything touching the worktree's files runs `narrowed` to it (sandbox.mjs).
+ * Every Durable Chat's folder as its store keeps it (`fence-folder.json`, written at open by durable-pilot's
+ * `chatFolder`, in a store no fence grants); throws when a store cannot be read, so the removal fails closed.
+ */
+function chatFolders(home) {
+  const stores = join(home, ".pi-web-durable", "durable");
+  let entries;
+  try { entries = readdirSync(stores, { withFileTypes: true }); } catch (error) { if (error.code === "ENOENT") return []; throw new Error(`${stores} cannot be read (${error.code})`); }
+  return entries.filter((e) => e.isDirectory()).flatMap((e) => {
+    const file = join(stores, e.name, "fence-folder.json");
+    let kept;
+    try { kept = JSON.parse(readFileSync(file, "utf8")); } catch (error) {
+      // shortcut: a store without the file (a read-only Chat, or one not opened since the host wrote these) counts as
+      // no folder; once every live Chat has reopened under that host, treat a missing file as unreadable too.
+      if (error.code === "ENOENT") return [];
+      throw new Error(`${file} cannot be read`);
+    }
+    if (typeof kept?.folder !== "string" || typeof kept.cwd !== "string") throw new Error(`${file} is malformed`);
+    return [kept.folder, real(kept.cwd)];
+  });
+}
+
+/** The commit and branch the worktree's HEAD names, read from git's files (no git, so no config is read). */
+function headAt(gitDir, common) {
+  const text = readText(join(gitDir, "HEAD"))?.trim() ?? "";
+  if (SHA.test(text)) return { head: text };
+  const ref = /^ref: (refs\/heads\/\S+)$/.exec(text)?.[1];
+  if (ref === undefined || ref.split("/").includes("..")) return {};
+  const loose = readText(join(common, ref))?.trim();
+  const head = SHA.test(loose ?? "") ? loose : readText(join(common, "packed-refs"))?.split("\n").find((l) => l.endsWith(` ${ref}`))?.split(" ")[0];
+  return { head: SHA.test(head ?? "") ? head : undefined, branch: ref.slice(11) };
+}
+
+/** `owner/repo` of a github.com remote URL (https or ssh form), or undefined. */
+export const githubRepo = (url) => { const m = /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|(?:ssh:\/\/)?git@github\.com[:/])([\w-][\w.-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url ?? ""); return m === null ? undefined : `${m[1]}/${m[2]}`; };
+
+/** The commits of `shas` GitHub has on no branch of `repo` among `branches`, or a gh failure. */
+async function unpushed(repo, shas, branches, env) {
+  // A clean env in a neutral folder: nothing of the worktree's repo steers gh or the git it may start.
+  const gh = (path) => run("gh", ["api", path, "--jq", path.includes("/compare/") ? ".status" : ".default_branch"], { cwd: "/", env: Object.fromEntries(Object.entries(env).filter(([k]) => !k.startsWith("GIT_"))) });
+  const info = await gh(`repos/${repo}`);
+  if (info.code !== 0 || info.stdout.trim() === "") return { error: `gh api repos/${repo} failed (${info.stderr.trim() || `exit ${info.code}`})` };
+  const bases = [...new Set([info.stdout.trim(), ...branches])].map((b) => b.split("/").map(encodeURIComponent).join("/"));
+  for (const sha of shas) {
+    let contained = false;
+    for (const base of bases) if (!contained) contained = ["identical", "behind"].includes((await gh(`repos/${repo}/compare/${base}...${sha}`)).stdout.trim());
+    if (!contained) return { sha };
+  }
+  return {};
+}
+
+/**
+ * `wt remove [path|branch]`: moves a linked worktree under ~/IdeaProjects and its git folder to
+ * ~/.pi-workbench/trash/<id>/ (scripts/fence-trash.mjs restores or empties it), only if GitHub has its head and every
+ * commit of its HEAD reflog on a branch, it is clean but for a top-level node_modules and .scratch/, and no Chat or
+ * running command works in it; .scratch/ is copied to the owning Workstream's scratch folder first. The branch stays.
+ * git status runs `narrowed` to the worktree's git folder (sandbox.mjs).
  */
 async function removeWorktree(target, cwd, env, chat) {
   const home = real(env.HOME ?? homedir());
@@ -195,24 +232,34 @@ async function removeWorktree(target, cwd, env, chat) {
   if (real(chat) === top || inside(real(chat), top)) return no(`${top} is this Chat's folder`);
   const busy = runningFolders(home).find((f) => f === top || inside(f, top));
   if (busy !== undefined) return no(`a running command works in ${busy}`);
-  // shortcut: open Chats' folders are not detectable reliably, so recent file activity stands in for them.
-  const quiet = Math.round((Date.now() - lastChange([top, tree.gitDir])) / 60_000);
-  if (quiet < QUIET_MS / 60_000) return no(`${top} or its git metadata changed ${quiet} min ago and open Chats' folders cannot be detected, so a worktree with file activity in the last 10 minutes stays; try again later`);
+  let folders;
+  try { folders = chatFolders(home); } catch (error) { return no(`${error.message}, so other Chats' folders are unknown`); }
+  const open = folders.find((f) => f === top || inside(f, top) || inside(top, f));
+  if (open !== undefined) return no(`a Chat works in ${open}`);
+  const { head, branch } = headAt(tree.gitDir, tree.common);
+  if (head === undefined) return no(`${top} has no commit checked out`);
+  // Only that file (no includes): the fence keeps <common>/config read-only, unlike remote-tracking refs.
+  const url = await run("git", ["config", "--file", join(tree.common, "config"), "--get", "remote.origin.url"], { cwd: "/", env: { PATH: env.PATH ?? "/usr/bin:/bin" } });
+  const repo = githubRepo(url.stdout.trim());
+  if (repo === undefined) return no(`its origin (${url.stdout.trim() || "none"}) is no GitHub repository, so whether it is pushed cannot be checked`);
+  const shas = new Set([head]);
+  for (const line of (readText(join(tree.gitDir, "logs", "HEAD")) ?? "").split("\n")) for (const sha of line.split(" ", 2)) if (SHA.test(sha) && !/^0+$/.test(sha)) shas.add(sha);
+  const missing = await unpushed(repo, shas, branch === undefined ? [] : [branch], env);
+  if (missing.error !== undefined) return no(missing.error);
+  if (missing.sha !== undefined) return no(`commit ${missing.sha.slice(0, 12)} of its HEAD history is on no branch of github.com/${repo}; push it first`);
   const fencedRun = (argv, write) => { const [file, ...args] = narrowed(argv, write, env); return run(file, args, { cwd: tree.main, env }); };
-  const fetched = await git(["fetch", "--quiet", "origin"], tree.main);
-  if (fetched.code !== 0) return no(`git fetch origin failed (${fetched.stderr.trim() || `exit ${fetched.code}`})`);
-  const head = (await git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], top)).stdout.trim();
-  if (head === "") return no(`${top} has no commit checked out`);
-  const ref = (await git(["symbolic-ref", "-q", "HEAD"], top)).stdout.trim();
-  const remotes = (await git(["for-each-ref", "--contains", head, "--format=%(refname)", "refs/remotes/origin/"], tree.main)).stdout.split("\n").filter((r) => r !== "" && r !== "refs/remotes/origin/HEAD");
-  if (remotes.length === 0) return no(`its head ${head.slice(0, 12)} is on no branch of origin; push it first`);
-  // No optional locks: a refused status must not touch the index, or the activity check would wait 10 minutes again.
-  const status = await fencedRun(["git", "--no-optional-locks", "-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z", "--ignore-submodules=none"], [tree.gitDir]);
+  const fencedGit = (args) => fencedRun(["git", "--no-optional-locks", "-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], [tree.gitDir]);
+  const status = await fencedGit(["status", "--porcelain=v1", "-z", "--ignored", "--ignore-submodules=none"]);
   if (status.code !== 0) return no(`git status failed (${status.stderr.trim() || `exit ${status.code}`})`);
-  const entries = status.stdout.split("\0").filter((e) => e !== "");
-  const dirty = entries.filter((e) => !["?? node_modules", "?? node_modules/", "?? .scratch/"].includes(e));
-  if (dirty.length > 0) return no(`${top} has uncommitted changes or untracked files: ${dirty.slice(0, 5).map((e) => e.slice(3)).join(", ")}${dirty.length > 5 ? ", …" : ""}`);
-  const branch = ref.startsWith("refs/heads/") ? ref.slice(11) : undefined;
+  // Ignored files too: a .env or build output lives nowhere else.
+  const dirty = status.stdout.split("\0").filter((e) => e !== "" && !/^(\?\?|!!) (node_modules\/?|\.scratch\/)$/.test(e));
+  if (dirty.length > 0) return no(`${top} has uncommitted changes, untracked or ignored files: ${dirty.slice(0, 5).map((e) => e.slice(3)).join(", ")}${dirty.length > 5 ? ", …" : ""}`);
+  const listed = await fencedGit(["ls-files", "-v", "-z"]);
+  if (listed.code !== 0) return no(`git ls-files failed (${listed.stderr.trim() || `exit ${listed.code}`})`);
+  // Assume-unchanged (lowercase tag) and skip-worktree (S) files hide their changes from git status.
+  const hidden = listed.stdout.split("\0").filter((e) => /^([a-z]|S) /.test(e));
+  if (hidden.length > 0) return no(`${top} has files git status does not check (assume-unchanged or skip-worktree): ${hidden.slice(0, 5).map((e) => e.slice(2)).join(", ")}`);
+  const name = (branch ?? head.slice(0, 12)).replace(/[^A-Za-z0-9._-]/g, "-");
   const scratch = join(top, ".scratch");
   let rescued;
   if (present(scratch) !== undefined) {
@@ -223,40 +270,36 @@ async function removeWorktree(target, cwd, env, chat) {
     const wsDir = join(home, ".pi-workbench", "scratch", ws);
     mkdirSync(wsDir, { recursive: true });
     if (!unlinked(wsDir)) return no(`${wsDir} passes through a symbolic link`);
-    rescued = join(wsDir, `rescued-${(branch ?? head.slice(0, 12)).replace(/[^A-Za-z0-9._-]/g, "-")}-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}`);
+    rescued = join(wsDir, `rescued-${name}-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}`);
     if (present(rescued) !== undefined) return no(`${rescued} already exists`);
   }
+  const trash = join(home, ".pi-workbench", "trash");
+  mkdirSync(trash, { recursive: true, mode: 0o700 });
+  if (!unlinked(trash)) return no(`${trash} passes through a symbolic link`);
+  // Same volume, so each move is one atomic rename: a write still under way lands in the trash, never lost.
+  if ([top, tree.gitDir].some((p) => lstatSync(p).dev !== lstatSync(trash).dev)) return no(`${top} is on another volume than ${trash}`);
+  const id = `${new Date().toISOString().slice(0, 19).replace(/[-:]/g, "")}Z-${basename(tree.main)}-${basename(tree.gitDir)}`;
+  const dest = join(trash, id);
+  if (rescued !== undefined) {
+    // Copied, links as links, under the narrowed fence: a link swapped in for .scratch reads no hidden folder.
+    const copied = await fencedRun(["/bin/cp", "-RP", "--", scratch, rescued], [dirname(rescued)]);
+    if (copied.code !== 0) return no(`copying ${scratch} to ${rescued} failed (${copied.stderr.trim()})`);
+  }
+  const kept = rescued === undefined ? "" : `; its .scratch is copied to ${rescued}`;
   // Again right before anything moves: the same worktree at the same real path, the same head.
   const again = worktreeAt(top, projects);
-  if (again.error !== undefined || again.gitDir !== tree.gitDir) return no(again.error ?? `${top} changed`);
-  if ((await git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], top)).stdout.trim() !== head) return no(`${top} got a new commit meanwhile`);
-  if (rescued !== undefined) {
-    const moved = await fencedRun(["/bin/mv", "--", scratch, rescued], [top, dirname(rescued)]);
-    if (moved.code !== 0) return no(`moving ${scratch} to ${rescued} failed (${moved.stderr.trim()})`);
+  if (again.error !== undefined || again.gitDir !== tree.gitDir) return fail(`wt remove: refused: ${again.error ?? `${top} changed`}; nothing was moved${kept}`);
+  if (headAt(tree.gitDir, tree.common).head !== head) return fail(`wt remove: refused: ${top} got a new commit meanwhile; nothing was moved${kept}`);
+  try { mkdirSync(dest); } catch (error) { return fail(`wt remove: ${dest}: ${error.message}; nothing was moved${kept}`); }
+  const restore = { id, movedAt: new Date().toISOString(), tree: top, gitDir: tree.gitDir, main: tree.main, branch, head, restore: `mv '${join(dest, "tree")}' '${top}' && mv '${join(dest, "gitdir")}' '${tree.gitDir}' && git -C '${tree.main}' worktree repair '${top}' (or: node scripts/fence-trash.mjs --restore ${id})` };
+  writeFileSync(join(dest, "restore.json"), `${JSON.stringify(restore, null, 1)}\n`, { flag: "wx" });
+  renameSync(top, join(dest, "tree"));
+  try { renameSync(tree.gitDir, join(dest, "gitdir")); } catch (error) {
+    renameSync(join(dest, "tree"), top);
+    rmSync(dest, { recursive: true });
+    return fail(`wt remove: moving ${tree.gitDir} failed (${error.message}); nothing was moved${kept}`);
   }
-  const kept = rescued === undefined ? "" : `; its .scratch is now ${rescued}`;
-  // An untracked node_modules (a link to the main checkout's) is the one thing git would need --force for.
-  if (entries.some((e) => e.startsWith("?? node_modules"))) {
-    const gone = await fencedRun(["/bin/rm", "-rf", "--", join(top, "node_modules")], [top]);
-    if (gone.code !== 0) return fail(`wt remove: removing ${join(top, "node_modules")} failed (${gone.stderr.trim()})${kept}`);
-  }
-  // Without --force: git checks again that nothing changed since.
-  const removed = await fencedRun(["git", "-C", tree.main, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "worktree", "remove", "--", top], [top, tree.gitDir]);
-  if (removed.code !== 0) return { ...removed, stderr: `${removed.stderr}wt remove: git kept ${top}${kept}\n` };
-  let note = "";
-  if (branch !== undefined) {
-    const oid = (await git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], tree.main)).stdout.trim();
-    let main = (await git(["symbolic-ref", "-q", "refs/remotes/origin/HEAD"], tree.main)).stdout.trim();
-    const named = /^ref: refs\/heads\/(\S+)\tHEAD$/m.exec(main === "" ? (await git(["ls-remote", "--symref", "origin", "HEAD"], tree.main)).stdout : "")?.[1];
-    if (named !== undefined) main = `refs/remotes/origin/${named}`;
-    const same = oid !== "" && (await git(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}^{commit}`], tree.main)).stdout.trim() === oid;
-    const merged = oid !== "" && main !== "" && (await git(["merge-base", "--is-ancestor", oid, main], tree.main)).code === 0;
-    const elsewhere = (await git(["worktree", "list", "--porcelain", "-z"], tree.main)).stdout.split("\0").includes(`branch ${ref}`);
-    // The old value guards against a commit made since the checks.
-    const deleted = (same || merged) && !elsewhere && (await git(["update-ref", "-d", ref, oid], tree.main)).code === 0;
-    note = deleted ? `; deleted branch ${branch} (${merged ? `merged into ${main.slice(13)}` : `same as origin/${branch}`})` : `; kept branch ${branch} (${elsewhere ? "checked out elsewhere" : `not merged into ${main === "" ? "origin's default branch" : main.slice(13)} and not the same as origin/${branch}`})`;
-  }
-  return { code: 0, stdout: "", stderr: `✓ Removed worktree ${top}${kept}${note}\n` };
+  return { code: 0, stdout: "", stderr: `✓ Moved worktree ${top} and its git folder to ${dest} (node scripts/fence-trash.mjs --restore ${id} puts them back)${kept}; branch ${branch ?? "(detached)"} kept\n` };
 }
 
 /**

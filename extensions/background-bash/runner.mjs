@@ -36,7 +36,7 @@ function run(dir) {
     // A fenced command reaches the few writes beyond its grants (Workstreams, new worktrees) through this runner.
     if (launch.fenced) {
       let ops;
-      try { ops = await serve(dir, launch.env, launch.owners, job.cwd); } catch (error) {
+      try { ops = await serve(dir, launch.env, launch.owners, job.folder ?? job.cwd); } catch (error) {
         closeSync(output);
         finish({ error: `Sandbox host operations unavailable: ${error.message}; the command was not run`, ...(job.owned ? { cleanup: { survivors: [] } } : {}) });
         process.exit(0);
