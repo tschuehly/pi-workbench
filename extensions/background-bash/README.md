@@ -66,8 +66,8 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
   owner and creator records and `.git` link stay read-only), linked worktrees whose creation receipt
   (`pi-creator.json`) names the chat (or, for a chat started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
-  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), the agents' own caches, and `~/.config/gcloud` and `~/.local/state/embabel-dev-vm` (gcloud's login and dev-run's state: agents can act as Thomas in GCP, which he accepted on 27 Nov). Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
-  folders (unfenced Pi loads compiled extensions from there) or Thomas's caches (`~/Library/Caches`, `~/.cache`,
+  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), the agents' own caches, and the agents' own gcloud and dev-run folders, `~/.pi-workbench/sandbox-cloud/{gcloud,dev-vm}` (always set as `CLOUDSDK_CONFIG` and `DEV_VM_STATE_DIR`; the gcloud one is seeded once from Thomas's `~/.config/gcloud` with only its login and configurations, so agents act as him in GCP, which he accepted on 27 Nov; delete it to reseed). Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
+  folders (unfenced Pi loads compiled extensions from there), Thomas's own `~/.config/gcloud` and `~/.local/state/embabel-dev-vm` (his unfenced gcloud and dev-run trust files there), or Thomas's caches (`~/Library/Caches`, `~/.cache`,
   `~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`): unfenced tools load code from them, e.g. Python's `.pyc` files.
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
   `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and

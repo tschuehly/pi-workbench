@@ -127,7 +127,7 @@ test("inside a fence the runner starts commands under the outer fence instead of
 
 test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a scratch folder counts once", () => {
   const h = "/Users/someone";
-  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches") && !p.endsWith("sandbox-runtime") && !p.endsWith("gcloud") && !p.endsWith("embabel-dev-vm"));
+  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches") && !p.endsWith("sandbox-runtime") && !p.includes("sandbox-cloud"));
   assert.deepEqual(rules(h), []);
   assert.deepEqual(rules(`${h}/IdeaProjects`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch`), []);
@@ -142,16 +142,45 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
 
-test("grants: gcloud's login and dev-run's state are writable, even before they exist; ~/.ssh stays read-only", () => {
+// Runs inside a fence too: grants and the environment only, on a fake home.
+test("gcloud and dev-run: fenced commands get their own folders, never Thomas's ~/.config/gcloud or dev-run state", () => {
   const fake = realpathSync(mkdtempSync(join(root, "cloud-home-")));
-  for (const dir of [".config/gcloud", ".local/state", ".ssh"]) mkdirSync(join(fake, dir), { recursive: true });
+  for (const dir of [".config/gcloud", ".local/state/embabel-dev-vm", ".ssh"]) mkdirSync(join(fake, dir), { recursive: true });
+  const agent = join(fake, ".pi-workbench", "sandbox-cloud");
   const rules = grants({ cwd: fake, home: fake });
-  for (const dir of [".config/gcloud", ".local/state/embabel-dev-vm"]) {
-    assert.ok(rules.write.includes(join(fake, dir)), dir);
-    assert.ok(mayWrite(join(fake, dir, "credentials.db"), rules), dir);
-    assert.ok(!rules.hidden.some((h) => join(fake, dir).startsWith(h)) && ![...rules.read, ...rules.locked].some((r) => join(fake, dir).startsWith(r)), `${dir} is not denied`);
+  for (const dir of ["gcloud", "dev-vm"]) {
+    assert.ok(rules.write.includes(join(agent, dir)), dir);
+    assert.ok(mayWrite(join(agent, dir, "credentials.db"), rules), dir);
   }
-  for (const path of [".ssh/id_ed25519", ".config/other", ".local/state/x"]) assert.ok(!mayWrite(join(fake, path), rules), path);
+  for (const path of [".config/gcloud/virtenv/enabled", ".config/gcloud/credentials.db", ".local/state/embabel-dev-vm/x.json", ".ssh/id_ed25519", ".pi-workbench/sandbox-cloud/x"]) assert.ok(!mayWrite(join(fake, path), rules), path);
+  const env = fencedEnv({ CLOUDSDK_CONFIG: join(fake, ".config/gcloud"), DEV_VM_STATE_DIR: join(fake, ".local/state/embabel-dev-vm") }, fake, undefined);
+  assert.equal(env.CLOUDSDK_CONFIG, join(agent, "gcloud"), "an inherited CLOUDSDK_CONFIG is overwritten");
+  assert.equal(env.DEV_VM_STATE_DIR, join(agent, "dev-vm"), "an inherited DEV_VM_STATE_DIR is overwritten");
+  assert.ok(statSync(join(agent, "dev-vm")).isDirectory());
+});
+
+test("gcloud seed: only login and configurations are copied from Thomas's folder, never virtenv or a symlinked source", () => {
+  const fake = realpathSync(mkdtempSync(join(root, "seed-home-")));
+  const from = join(fake, ".config", "gcloud");
+  for (const dir of ["configurations", "legacy_credentials/me@x", "virtenv/bin"]) mkdirSync(join(from, dir), { recursive: true });
+  for (const file of ["credentials.db", "access_tokens.db", "active_config", "configurations/config_default", "legacy_credentials/me@x/adc.json", "virtenv/enabled", "virtenv/bin/activate", "default_configs.db"]) writeFileSync(join(from, file), file);
+  const elsewhere = join(mkdtempSync(join(root, "seed-elsewhere-")), "adc.json");
+  writeFileSync(elsewhere, "planted");
+  symlinkSync(elsewhere, join(from, "application_default_credentials.json"));
+  const to = fencedEnv({}, fake, undefined).CLOUDSDK_CONFIG;
+  assert.deepEqual(readdirSync(to).sort(), ["access_tokens.db", "active_config", "configurations", "credentials.db", "legacy_credentials"]);
+  assert.equal(readFileSync(join(to, "legacy_credentials/me@x/adc.json"), "utf8"), "legacy_credentials/me@x/adc.json");
+  assert.equal(readFileSync(join(to, "configurations/config_default"), "utf8"), "configurations/config_default");
+  // Seeded once: a later change in Thomas's folder does not flow in until the agent folder is deleted.
+  writeFileSync(join(from, "credentials.db"), "new login");
+  fencedEnv({}, fake, undefined);
+  assert.equal(readFileSync(join(to, "credentials.db"), "utf8"), "credentials.db");
+  rmSync(to, { recursive: true });
+  fencedEnv({}, fake, undefined);
+  assert.equal(readFileSync(join(to, "credentials.db"), "utf8"), "new login");
+  // No gcloud folder of Thomas's: an empty agent folder.
+  const bare = realpathSync(mkdtempSync(join(root, "seed-bare-")));
+  assert.deepEqual(readdirSync(fencedEnv({}, bare, undefined).CLOUDSDK_CONFIG), []);
 });
 
 test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute, --clobber or `wt remove`", () => {

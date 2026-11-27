@@ -20,9 +20,15 @@ const AGENT_CACHES = ".pi-workbench/sandbox-caches";
 // fence grants. One folder for every fenced job (they all lock the shared agent store), outside the agent caches so no
 // fenced command can replace it or change its mode: only its contents are granted.
 const RUNTIME = ".pi-workbench/sandbox-runtime";
-// gcloud's login and dev-run's VM state, granted as they are (made by the tools themselves when missing): Thomas
-// accepted that agents can then act as him in GCP (27 Nov).
-const CLOUD = [".config/gcloud", ".local/state/embabel-dev-vm"];
+// gcloud's config folder and dev-run's VM state for fenced commands: their own, never Thomas's, whose launcher and
+// state unfenced tools trust (gcloud sources virtenv/bin/activate; dev-run follows a planted `.part` link). Made by the
+// runner, outside the fence; only the two children are granted, so no fenced command replaces them or their parent.
+const CLOUD = ".pi-workbench/sandbox-cloud";
+// Seeded from Thomas's ~/.config/gcloud so agents act as him in GCP (Thomas accepted, 27 Nov): only login and
+// configurations, never virtenv/ or anything else. A planted virtenv or local_python in this copy only runs fenced.
+// shortcut: seeded once, so Thomas's later logins never reach agents; delete ~/.pi-workbench/sandbox-cloud/gcloud to
+// reseed on the next fenced command. Upgrade to a sync if he re-logs in often.
+const GCLOUD_SEED = ["credentials.db", "access_tokens.db", "application_default_credentials.json", "legacy_credentials", "configurations", "active_config"];
 // shortcut: a job can plant a file where pnpm's lock folder goes and break later fenced installs, like it can break
 // the shared agent store itself; delete the entry to recover. Upgrade to per-job store and runtime if this happens.
 
@@ -141,7 +147,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
-  write.push(join(home, AGENT_CACHES), join(home, RUNTIME), ...CLOUD.map((p) => join(home, p)));
+  write.push(join(home, AGENT_CACHES), join(home, RUNTIME), join(home, CLOUD, "gcloud"), join(home, CLOUD, "dev-vm"));
   locked.push(join(home, RUNTIME));
   return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
 }
@@ -226,6 +232,27 @@ function seed(from, to, home) {
   finally { rmSync(work, { recursive: true, force: true }); }
 }
 
+/** Thomas's gcloud login copied to `to` once: only GCLOUD_SEED, never a symlink, built aside then renamed into place. */
+function seedGcloud(from, to, home) {
+  if (present(to)) return;
+  mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
+  mkdirSync(join(home, ".pi-workbench", "sandbox"), { recursive: true, mode: 0o700 });
+  const work = mkdtempSync(join(home, ".pi-workbench", "sandbox", "seed-"));
+  try {
+    mkdirSync(join(work, "copy"), { mode: 0o700 });
+    const folder = (() => { try { return lstatSync(from).isDirectory(); } catch { return false; } })();
+    for (const name of folder ? GCLOUD_SEED : []) {
+      let stat;
+      try { stat = lstatSync(join(from, name)); } catch { continue; }
+      if (stat.isSymbolicLink()) continue;
+      // -P: links inside the copied folders stay links, never followed.
+      execFileSync("/bin/cp", ["-pPR", join(from, name), join(work, "copy", name)], { stdio: "ignore", timeout: 60_000 });
+    }
+    renameSync(join(work, "copy"), to);
+  } catch { /* another runner won the race, or a copy failed: retried on the next command */ }
+  finally { rmSync(work, { recursive: true, force: true }); }
+}
+
 /**
  * A short path for the Chat's temp folder: `PI_TMP` itself can pass the 104-byte Unix socket limit (tmux, Chromium and
  * any `listen($TMPDIR/x.sock)` fail). A link under ~/.pi-workbench/t, which no fenced command can write, to PI_TMP.
@@ -255,6 +282,9 @@ export function fencedEnv(env, home, grantedTmp) {
   mkdirSync(caches, { recursive: true, mode: 0o700 });
   const runtime = join(real(home), RUNTIME);
   for (const [from, to] of SEEDS) seed(join(real(home), from), join(caches, to), real(home));
+  const cloud = join(real(home), CLOUD);
+  seedGcloud(join(real(home), ".config", "gcloud"), join(cloud, "gcloud"), real(home));
+  mkdirSync(join(cloud, "dev-vm"), { recursive: true, mode: 0o700 });
   const gradleCaches = join(real(home), ".gradle", "caches");
   const { XDG_RUNTIME_DIR: _inherited, ...rest } = env;
   return {
@@ -274,6 +304,9 @@ export function fencedEnv(env, home, grantedTmp) {
     GOCACHE: join(caches, "go-build"),
     // clang (and Swift) keep compiled modules in the per-user cache folder, which no fence grants.
     CLANG_MODULE_CACHE_PATH: join(caches, "clang-modules"),
+    // Always the agents' own: an inherited value would point fenced gcloud or dev-run at Thomas's folders.
+    CLOUDSDK_CONFIG: join(cloud, "gcloud"),
+    DEV_VM_STATE_DIR: join(cloud, "dev-vm"),
     ...(privateDir(runtime) ? { XDG_RUNTIME_DIR: runtime } : {}),
   };
 }
