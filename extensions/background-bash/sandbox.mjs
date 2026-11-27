@@ -210,12 +210,10 @@ export function profile({ readOnly = false, write, read, reopen = [], locked = [
     // the hosts, PI WEB), which would run any code outside the fence.
     "(deny signal)",
     "(allow signal (target same-sandbox))",
-    // No inspecting processes outside this sandbox; its own children stay visible.
+    // No inspecting processes outside this sandbox; its own children stay visible. Command lines and environments
+    // stay readable through sysctl kern.procargs* (Thomas chose working `pgrep -f`; launch secrets never go there).
     "(deny process-info* (target others))",
     "(allow process-info* (target same-sandbox))",
-    // ps and pgrep read command lines and environments (a host's launch nonce) through sysctl kern.procargs*, which
-    // process-info does not cover and no rule can narrow to a target: every process's arguments stay unreadable.
-    '(deny sysctl-read (sysctl-name-prefix "kern.procargs"))',
   ];
   return [...params, "-p", rules.join("\n")];
 }
