@@ -231,7 +231,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	let opened: Host | undefined;
 	// The lead is the active branch: history navigation may select another.
 	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, wake: (conversation, draft) => submitWake(conversation, draft, opened!.models) });
-	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
+	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, writeRefusal: (path) => bash.writeRefusal(path, options.cwd, opened!.root.id), ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
 	const messenger = new ChatMessenger(chatId);

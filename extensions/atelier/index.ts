@@ -5,7 +5,8 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
 import { REQUEST_STATES, derive } from "./kernel/atelier.js";
-import { WATCHDOG_MS, createHost, readLog } from "./host.ts";
+import { WATCHDOG_MS, createHost, outsideGrants, readLog } from "./host.ts";
+import { fenced, writeRefusal } from "../background-bash/sandbox.mjs";
 import { checkPage, formatCheck } from "./check-page.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
 import type { Host, Message } from "./host.ts";
@@ -91,6 +92,10 @@ export default function atelierExtension(pi: ExtensionAPI) {
       let page: string | undefined;
       try { page = realpathSync(path.resolve(root, params.page)); } catch { /* missing */ }
       if (!page || !statSync(page).isFile()) throw new Error(`No Page file at ${params.page}.`);
+      let tmp = process.env.PI_TMP;
+      try { if (sessionId) tmp = piTmpDir(ctx.cwd, sessionId); } catch { /* unwritable root: checkPage reports it unchecked */ }
+      // Before any lock, Kernel copy, Event Log or check copy is written beside it; every other action needs open first.
+      if (fenced() && await writeRefusal(`${page}.events.jsonl`, { cwd: ctx.cwd, sessionId, env: tmp ? { ...process.env, PI_TMP: tmp } : process.env }) !== undefined) throw new Error(outsideGrants(page));
       // The handover note reaches a busy session mid-run and an idle one without starting a turn.
       // Idle for a takeover: no run, and none starting from a send already queued.
       host ??= createHost({ root, send, sessionId, label: pi.getSessionName?.(), handoff: (m) => pi.sendMessage(m, { deliverAs: "steer" }), idle: () => !starting && (current?.isIdle() ?? true) });
@@ -100,8 +105,6 @@ export default function atelierExtension(pi: ExtensionAPI) {
       // this session's PI_TMP folder: an attended process hosts several sessions and has no process-wide PI_TMP.
       const checked = async (t: string, details: Record<string, unknown> = {}, source?: Buffer) => {
         if (process.env.ATELIER_PAGE_CHECK === "off") return text(t, details);
-        let tmp = process.env.PI_TMP;
-        try { if (sessionId) tmp = piTmpDir(ctx.cwd, sessionId); } catch { /* unwritable root: checkPage reports it unchecked */ }
         const check = await checkPage(page!, { root: host!.root, tmp, source, signal }).catch((error: unknown) => ({ status: "unchecked", viewport: "", revision: null, checks: [], views: [], unchecked: [String(error).slice(0, 300)], report: null }));
         return text([t, formatCheck(check)].filter(Boolean).join("\n\n"), { ...details, check });
       };

@@ -32,6 +32,8 @@ type Entry = { seq: number; at: number; origin: string; type: string; [field: st
 export type Message = { customType: string; content: string; display: true; details: { page: string; seqs: number[]; replay: boolean; generation?: number; uncertain?: number[] } };
 
 export const logPath = (page: string) => `${page}.events.jsonl`;
+/** Atelier writes beside a Page (Event Log, lock, Kernel copies, check copy), so on a fenced Mac it serves only Pages its Chat may write there. */
+export const outsideGrants = (page: string) => `Atelier refused ${page}: it lies outside this Chat's write folders, and Atelier writes its Event Log, lock and Kernel copies beside the Page. Put the Page inside this Chat's own folder, its Workstream scratch folder or PI_TMP (e.g. copy it there) and use that path.`;
 /** Images the human attaches to a Decision's answer or a Comment live beside the Event Log; the log names them relative to the Page's directory. */
 export const imagesDir = (page: string) => `${page}.images`;
 

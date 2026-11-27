@@ -6,7 +6,8 @@ description: "Page contract and Registry index for the atelier tool. Use before 
 # Atelier
 
 A Page is one HTML file, in the project or at any absolute path. Write it, then call `atelier` with `open` and link the
-returned URL in the Chat; if the tool is missing, call `tools_enable` with group `atelier` first. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
+returned URL in the Chat; if the tool is missing, call `tools_enable` with group `atelier` first. On a fenced Mac the Page must lie inside the Chat's write folders (its
+folder, its Workstream scratch folder or PI_TMP), since Atelier writes beside it; elsewhere `open` refuses. Terms: `extensions/atelier/GLOSSARY.md` in pi-workbench.
 
 Only that URL works. A file path or Markdown file link opens the Page without its Kernel: no Decisions, no
 Comments, nothing reaches Pi. When `open` refuses because another session receives the Page, ask the human

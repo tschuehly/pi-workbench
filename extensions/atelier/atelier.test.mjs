@@ -5,7 +5,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import fs from "node:fs";
 import http from "node:http";
 import { syncBuiltinESMExports } from "node:module";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import atelierExtension, { appendLog, claimPage, claimSteps, copyKernel, createHost, dueMessages, readLog } from "./index.ts";
@@ -389,6 +389,37 @@ test("the extension delivers as an atelier follow-up message and records the rec
     await assert.rejects(run({ action: "answer", comment: 1, text: "x" }), /Comment/);
     await assert.rejects(run({ action: "open", page: "../outside.html" }), /No Page file/);
   } finally { handlers.session_shutdown(); p.done(); }
+});
+
+test("on a fenced Mac a Page outside the Chat's write folders is refused before anything is written; one inside opens", { skip: process.platform !== "darwin" && "the write fence is macOS only" }, async () => {
+  // Under home, as the write grants are: the Chat's git checkout and a folder beside it.
+  const base = process.env.PI_TMP ?? path.join(homedir(), ".pi-workbench", "tmp");
+  mkdirSync(base, { recursive: true });
+  const root = realpathSync(mkdtempSync(path.join(base, "atelier-outside-")));
+  const repo = path.join(root, "repo"), outside = path.join(root, "outside");
+  for (const dir of [repo, outside]) { mkdirSync(dir); writeFileSync(path.join(dir, "page.html"), "<!doctype html><title>t</title>"); }
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  const saved = process.env.PI_TMP_ROOT;
+  process.env.PI_TMP_ROOT = path.join(root, "pi-tmp");
+  const tools = new Map(), handlers = {};
+  atelierExtension({ registerTool: (t) => tools.set(t.name, t), on: (n, fn) => { handlers[n] = fn; }, sendMessage: () => {} });
+  const ctx = { cwd: repo, isIdle: () => true, sessionManager: { getSessionId: () => `s-outside-${process.pid}` } };
+  handlers.session_start({}, ctx);
+  const run = (params) => tools.get("atelier").execute("id", params, undefined, undefined, ctx);
+  const page = path.join(outside, "page.html");
+  try {
+    for (const action of ["open", "takeover", "check"]) {
+      await assert.rejects(run({ action, page, generation: 1 }), (e) => /Atelier refused .*outside this Chat's write folders.*its Workstream scratch folder or PI_TMP \(e\.g\. copy it there\)/.test(e.message), action);
+    }
+    assert.deepEqual(readdirSync(outside), ["page.html"], "nothing beside the refused Page");
+    assert.deepEqual(readdirSync(repo).filter((f) => f !== ".git"), ["page.html"], "nor in the Chat's folder");
+    await run({ action: "open", page: "page.html" });
+    assert.ok(existsSync(path.join(repo, "page.html.events.jsonl.lock")) && existsSync(path.join(repo, "atelier.js")), "inside the grants: opened as before");
+  } finally {
+    handlers.session_shutdown();
+    if (saved === undefined) delete process.env.PI_TMP_ROOT; else process.env.PI_TMP_ROOT = saved;
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("retract withdraws an asked Decision: it no longer asks, and the Event Log keeps the reason (2.14.0)", async () => {

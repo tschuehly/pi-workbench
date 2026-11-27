@@ -61,17 +61,18 @@ type PageHost = {
 type Kernel = {
 	createHost(options: { root: string; sessionId: string; label: string; send: (message: Message, done: (idle: boolean) => void, failed: () => void) => void; handoff: (message: Message) => void; idle: () => boolean; port?: number; release?: () => string | undefined }): PageHost;
 	readLog(page: string): Entry[];
+	outsideGrants(page: string): string;
 };
 type Check = { checkPage(page: string, options: { root: string; source?: Buffer; signal?: AbortSignal; tmp?: string }): Promise<unknown>; formatCheck(check: unknown): string };
 // tsc would check the Workbench extension's .ts files as CommonJS (no package type there), so the kernel host and the
 // Page check (which imports it) are loaded by URL and typed by the facades above; Node runs them as the modules they are.
-const { createHost, readLog } = (await import(new URL("../../../extensions/atelier/host.ts", import.meta.url).href)) as Kernel;
+const { createHost, outsideGrants, readLog } = (await import(new URL("../../../extensions/atelier/host.ts", import.meta.url).href)) as Kernel;
 const { checkPage, formatCheck } = (await import(new URL("../../../extensions/atelier/check-page.mjs", import.meta.url).href)) as Check;
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 const pageHash = (page: string) => createHash("sha256").update(page).digest("hex").slice(0, 16);
 export const ATELIER_STATUS = "pi-workbench:atelier";
-export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined; readonly release?: () => string | undefined };
+export type AtelierOptions = { readonly chatId: string; readonly cwd: string; readonly rootId: () => ConversationId | undefined; readonly release?: () => string | undefined; /** Why the lead's write fence refuses `path` (background-bash.ts `writeRefusal`). */ readonly writeRefusal?: (path: string) => Promise<string | undefined> };
 
 export class Atelier {
 	readonly #options: AtelierOptions;
@@ -237,6 +238,8 @@ export class Atelier {
 					// missing
 				}
 				if (page === undefined || !statSync(page).isFile()) throw new Error(`No Page file at ${params.page}.`);
+				// Before any lock, Kernel copy, Event Log or check copy is written beside it; every other action needs open first.
+				if ((await this.#options.writeRefusal?.(`${page}.events.jsonl`)) !== undefined) throw new Error(outsideGrants(page));
 				const op = String(api.taskId);
 				const result = (t: string, details: Record<string, unknown> = {}) => ({ output: text(t), details: JSON.parse(JSON.stringify({ action: params.action, page: host.rel(page!), ...details })) });
 				// The Page check (check-page.mjs) on a test copy; ATELIER_PAGE_CHECK=off skips it. It never fails the action.

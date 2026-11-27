@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { after, test } from "node:test";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
+import { Atelier } from "../src/atelier.ts";
 
 type Message = { role: string; customType?: string; content?: unknown; details?: Record<string, unknown> };
 type Entry = { seq: number; at: number; type: string; origin: string; of?: number[]; op?: string; text?: string };
@@ -130,6 +131,27 @@ test("P075 check measures the Page in a real browser: the Chat's PI_TMP holds it
 	assert.match(String(end.text), /Views \(1\)/);
 	assert.match(String(end.text), new RegExp(`Full report: ${join(ROOT, "pi-tmp")}/`), "the report is in the Chat's PI_TMP");
 	await host.close();
+});
+
+test("a Page the lead's write fence refuses is refused before anything is written beside it (writeRefusal injected: this suite's host may run inside a fence, where it never refuses)", async () => {
+	const { cwd } = family("outside");
+	const outside = join(ROOT, "outside", "elsewhere");
+	mkdirSync(outside, { recursive: true });
+	writeFileSync(join(outside, "page.html"), PAGE);
+	const asked: string[] = [];
+	const lead = "lead" as never;
+	const atelier = new Atelier({ chatId: "c-outside", cwd, rootId: () => lead, writeRefusal: async (path) => (asked.push(path), path.startsWith(outside) ? "Blocked" : undefined) });
+	await atelier.start(() => ({ id: lead }) as never, { snapshot: async () => undefined } as never, { deliver: (work) => work() });
+	const [tool] = atelier.extension().tools as unknown as { execute: (params: object, api: object, c: unknown) => Promise<unknown> }[];
+	try {
+		for (const action of ["open", "takeover", "check"]) {
+			await assert.rejects(tool!.execute({ action, page: join(outside, "page.html"), generation: 1 }, { conversationId: lead, taskId: action }, undefined), /Atelier refused .*outside this Chat's write folders/, action);
+		}
+		assert.deepEqual(readdirSync(outside), ["page.html"], "nothing beside the refused Page");
+		assert.deepEqual(asked, Array(3).fill(join(outside, "page.html.events.jsonl")));
+	} finally {
+		atelier.close();
+	}
 });
 
 test("P076 a Comment arriving while the Chat is busy is one follow-up after the run, never inside it", async () => {
