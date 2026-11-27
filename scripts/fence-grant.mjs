@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Owner-only grants for the write fence (extensions/background-bash/sandbox.mjs, ws-workbench-sandbox-20261124):
-// a checkout or folder Thomas grants a Workstream becomes writable for every Chat started in its scratch folder.
+// a checkout under ~/IdeaProjects or a Workstream scratch folder Thomas grants a Workstream becomes writable for every
+// Chat started in its scratch folder; never a plain folder (its nested repos' git hooks would become writable).
 // Run it unfenced (Terminal or a Run button): its files live in ~/.pi-workbench/sandbox, which no fence grants.
 //   fence-grant.mjs <ws-id> <path>           grant
 //   fence-grant.mjs --revoke <ws-id> <path>  revoke

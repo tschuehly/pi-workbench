@@ -10,7 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
 import { grant, revoke } from "../../scripts/fence-grant.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grantRefusal, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grantRefusal, grants, grantsFile, mayWrite, ownedWorktrees, profile, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -573,18 +573,31 @@ test("Workstream grants: a Chat started in the Workstream's scratch folder write
   const blocked = async (path, cwd = scratchDir) => /^Blocked/.test(await writeRefusal(path, { cwd, sessionId: "grant-test", env }) ?? "");
   assert.ok(await blocked(join(app, "x")), "not before the grant");
   assert.equal(grant(fake, "ws-x", app), app);
-  assert.equal(grant(fake, "ws-x", notes), notes);
+  const other = join(fake, ".pi-workbench", "scratch", "ws-y");
+  mkdirSync(other);
+  assert.equal(grant(fake, "ws-x", other), other);
   assert.equal(await blocked(join(app, "src", "x")), false, "the granted checkout");
   assert.equal(await blocked(join(app, ".git", "refs", "heads", "x")), false, "its git folder");
-  assert.equal(await blocked(join(notes, "x")), false, "a granted plain folder");
-  for (const path of [join(app, ".git", "hooks", "pre-commit"), join(app, ".git", "config"), join(app, ".git", "pi-creator.json"), join(app, "AGENTS.md"), join(notes, ".pi", "x")]) assert.ok(await blocked(path), path);
-  assert.ok(await blocked(join(app, "x"), join(fake, ".pi-workbench", "scratch", "ws-y")), "a Chat started in another Workstream's folder");
+  assert.equal(await blocked(join(other, "x")), false, "a granted Workstream scratch folder");
+  for (const path of [join(app, ".git", "hooks", "pre-commit"), join(app, ".git", "config"), join(app, ".git", "pi-creator.json"), join(app, "AGENTS.md"), join(app, ".envrc"), join(app, "sub", ".envrc")]) assert.ok(await blocked(path), path);
+  assert.ok(await blocked(join(app, "x"), join(fake, ".pi-workbench", "scratch", "ws-z")), "a Chat started in another Workstream's folder");
   assert.ok(await blocked(join(app, "x"), fake), "a Chat started in home");
+  // Review of 35fafff (Terra): a plain folder grant made nested repos' .git/hooks writable; refused, and ignored if stored.
+  const nested = join(notes, "app");
+  mkdirSync(nested);
+  execFileSync("git", ["init", "-q", nested]);
+  assert.throws(() => grant(fake, "ws-x", notes), /refused: .* only a checkout under ~\/IdeaProjects or a Workstream scratch folder/);
+  assert.throws(() => grant(fake, "ws-x", nested), /refused/, "a checkout outside ~/IdeaProjects");
+  mkdirSync(join(other, "sub"));
+  assert.throws(() => grant(fake, "ws-x", join(other, "sub")), /refused/, "inside a scratch folder");
+  writeFileSync(grantsFile(fake, "ws-x"), JSON.stringify({ paths: [app, notes, nested] }));
+  assert.ok(await blocked(join(nested, ".git", "hooks", "pre-commit")), "a stored plain-folder grant grants nothing");
+  assert.ok(await blocked(join(notes, "x")));
   // A grant is the real folder the owner chose: one swapped for a link later grants nothing.
-  rmSync(notes, { recursive: true });
-  symlinkSync(join(fake, ".pi-web-durable"), notes);
+  rmSync(other, { recursive: true });
+  symlinkSync(join(fake, ".pi-web-durable"), other);
   mkdirSync(join(fake, ".pi-web-durable"));
-  assert.ok(await blocked(join(notes, "x")), "a link swapped in for a granted folder");
+  assert.ok(await blocked(join(other, "x")), "a link swapped in for a granted folder");
   assert.ok(revoke(fake, "ws-x", app));
   assert.ok(await blocked(join(app, "x")), "not after revoke");
   // Refused at grant time and again when applied, whatever the grant file says.
@@ -592,10 +605,58 @@ test("Workstream grants: a Chat started in the Workstream's scratch folder write
     assert.ok(grantRefusal(dir, fake), dir);
     assert.deepEqual(grants({ cwd: fake, home: fake, granted: [dir] }).write.filter((w) => !w.includes("sandbox-")), [], dir);
   }
-  assert.equal(grantRefusal(join(fake, ".pi-workbench", "scratch", "ws-y"), fake), undefined, "another Workstream's scratch folder may be granted");
+  mkdirSync(join(fake, ".pi-workbench", "scratch", "ws-w"));
+  assert.equal(grantRefusal(join(fake, ".pi-workbench", "scratch", "ws-w"), fake), undefined, "another Workstream's scratch folder may be granted");
   mkdirSync(join(fake, ".pi"));
   assert.throws(() => grant(fake, "ws-x", join(fake, ".pi")), /refused/);
   assert.throws(() => grant(fake, "../ws-x", app), /not a Workstream ID/);
+});
+
+// Review of 35fafff (Terra): a `.git` file naming another repo's git folder made git report that folder as this
+// folder's own, and the fence granted it. Runs inside a fence too: it only computes the grants.
+test("a .git file planted in a scratch or granted folder never grants another repo's git folder", () => {
+  const fake = realpathSync(mkdtempSync(join(root, "plant-home-")));
+  const victim = join(fake, "IdeaProjects", "victim");
+  mkdirSync(victim, { recursive: true });
+  execFileSync("git", ["init", "-q", victim]);
+  const attack = join(victim, ".git", "refs", "heads", "attack");
+  const scratchDir = join(fake, ".pi-workbench", "scratch", "ws-x");
+  const granted = join(fake, ".pi-workbench", "scratch", "ws-y");
+  for (const dir of [scratchDir, granted]) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".git"), `gitdir: ${join(victim, ".git")}\n`);
+  }
+  assert.equal(execFileSync("git", ["-C", scratchDir, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim(), scratchDir, "git takes the planted file");
+  const inScratch = grants({ cwd: scratchDir, home: fake });
+  assert.equal(mayWrite(attack, inScratch), false, "a Chat started in its scratch folder");
+  assert.equal(mayWrite(join(scratchDir, "notes.md"), inScratch), true, "still writes its own scratch folder");
+  const viaGrant = grants({ cwd: fake, home: fake, granted: [granted] });
+  assert.equal(mayWrite(attack, viaGrant), false, "a granted folder");
+  assert.equal(mayWrite(join(granted, "notes.md"), viaGrant), true, "the granted scratch folder itself");
+  // A fake linked worktree: its own metadata folder, linked back, with a commondir naming the victim's.
+  const meta = join(scratchDir, "meta");
+  mkdirSync(meta);
+  writeFileSync(join(scratchDir, ".git"), `gitdir: ${meta}\n`);
+  writeFileSync(join(meta, "gitdir"), `${join(scratchDir, ".git")}\n`);
+  writeFileSync(join(meta, "commondir"), `${join(victim, ".git")}\n`);
+  writeFileSync(join(meta, "HEAD"), "ref: refs/heads/main\n");
+  assert.equal(execFileSync("git", ["-C", scratchDir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim(), join(victim, ".git"), "git takes the fake worktree");
+  assert.equal(mayWrite(attack, grants({ cwd: scratchDir, home: fake })), false, "a fake linked worktree");
+  // A real checkout and a real linked worktree still count.
+  execFileSync("git", ["-C", victim, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]);
+  const tree = join(fake, "IdeaProjects", "victim.feature");
+  execFileSync("git", ["-C", victim, "worktree", "add", "-q", "-b", "feature", tree]);
+  assert.equal(mayWrite(attack, grants({ cwd: victim, home: fake })), true, "a main checkout");
+  assert.equal(mayWrite(attack, grants({ cwd: tree, home: fake })), true, "a linked worktree");
+});
+
+// Review of 35fafff (Terra): direnv runs an .envrc unfenced when Thomas enters its folder.
+test("no .envrc at any depth is writable inside any grant", () => {
+  const g = "/Users/someone/IdeaProjects/app";
+  const rules = profile({ write: [g], read: [], hidden: [] }).at(-1);
+  assert.match(rules, /\(deny file-write\* \(regex #"\/\\\.\[Ee\]\[Nn\]\[Vv\]\[Rr\]\[Cc\]\$"\)\)/);
+  for (const path of [`${g}/.envrc`, `${g}/sub/.envrc`, `${g}/.ENVRC`]) assert.equal(mayWrite(path, { write: [g] }), false, path);
+  assert.equal(mayWrite(`${g}/.envrc.example`, { write: [g] }), true);
 });
 
 test("Workstream grants: a fenced command commits in a granted checkout and cannot write the grant file", { skip }, async () => {

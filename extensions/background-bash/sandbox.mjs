@@ -74,6 +74,18 @@ const readText = (path) => { try { return readFileSync(path, "utf8"); } catch { 
 /** Git's two links of a linked worktree agree: its `.git` file names `gitDir`, whose `gitdir` file names it back. */
 export const linked = (top, gitDir) => readText(join(top, ".git"))?.trim() === `gitdir: ${gitDir}` && real(readText(join(gitDir, "gitdir"))?.trim() ?? "") === join(top, ".git");
 
+const realDir = (path) => { try { return lstatSync(path).isDirectory(); } catch { return false; } };
+
+/**
+ * Git's view `repo` is a real checkout, not one a planted `.git` file or `commondir` makes up (it can name any repo's
+ * git folder): a main checkout's git folder is its own `.git` directory; a linked worktree's links agree and its
+ * metadata lies in `.git/worktrees` of a main checkout under ~/IdeaProjects.
+ */
+export function verified({ top, gitDir, common }, home) {
+  if (gitDir === common) return common === join(top, ".git") && realDir(join(top, ".git"));
+  return dirname(gitDir) === join(common, "worktrees") && basename(common) === ".git" && realDir(common) && inside(dirname(common), real(join(home, "IdeaProjects"))) && linked(top, gitDir);
+}
+
 export function ownedWorktrees(home, owners) {
   const found = [];
   const projects = join(home, "IdeaProjects");
@@ -107,10 +119,14 @@ function limits(home) {
 
 /** Why the owner may not grant the real folder `dir` to a Workstream (fence-grant.mjs); undefined when he may. */
 export function grantRefusal(dir, home = homedir()) {
-  const { pw, scratchRoot, grantable } = limits(real(home));
+  home = real(home);
+  const { scratchRoot, grantable } = limits(home);
   if (typeof dir !== "string" || !isAbsolute(dir) || !grantable(dir)) return `${dir} is home, ~/IdeaProjects itself, Pi's own state or outside home`;
-  if (inside(dir, pw) && !inside(dir, scratchRoot)) return `${dir} is Pi Workbench state; only a scratch/<ws> folder there may be granted`;
-  return undefined;
+  if (dirname(dir) === scratchRoot && workstreamId(basename(dir)) !== undefined) return undefined;
+  const repo = git(dir);
+  // Never a plain folder: it would make the git hooks of every repo inside it writable, run later unfenced.
+  if (repo?.top === dir && inside(dir, real(join(home, "IdeaProjects"))) && verified(repo, home)) return undefined;
+  return `${dir} is no checkout under ~/IdeaProjects; only a checkout under ~/IdeaProjects or a Workstream scratch folder may be granted`;
 }
 
 // Owner grants live where no fence grants (`never`), written only by scripts/fence-grant.mjs run unfenced, so no
@@ -122,7 +138,8 @@ export function workstreamGrants(home, ws) {
   if (workstreamId(ws) === undefined) return [];
   try {
     const paths = JSON.parse(readFileSync(grantsFile(home, ws), "utf8")).paths;
-    return Array.isArray(paths) ? paths.filter((p) => typeof p === "string") : [];
+    // A plain folder stored before grants were checkouts only grants nothing.
+    return Array.isArray(paths) ? paths.filter((p) => typeof p === "string" && grantRefusal(p, home) === undefined) : [];
   } catch { return []; }
 }
 
@@ -143,8 +160,8 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], 
   const locked = [];
   const history = [];
   const checkout = (repo) => {
-    // A linked worktree whose links disagree (its .git file repointed) is no checkout of this repo: no grant.
-    if (repo.gitDir !== repo.common && !linked(repo.top, repo.gitDir)) return;
+    // A planted or repointed .git file would name another repo's git folder: no grant.
+    if (!verified(repo, home)) return false;
     write.push(repo.top, repo.gitDir, repo.common);
     // Git history: objects are only ever added, so none may be deleted, renamed or overwritten (Thomas, 24 Nov).
     if (!history.includes(join(repo.common, "objects"))) history.push(join(repo.common, "objects"));
@@ -155,10 +172,10 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], 
     locked.push(...[OWNER, `${OWNER}.lock`, CREATOR, "commondir", "config.worktree"].map((f) => join(repo.common, f)), ...[OWNER, `${OWNER}.lock`, CREATOR, "gitdir", "commondir", "config.worktree"].map((f) => join(repo.gitDir, f)));
     // Its .git file: repointed, every later git there (an unfenced one too) would read a config the agent wrote.
     if (repo.gitDir !== repo.common) locked.push(join(repo.top, ".git"));
+    return true;
   };
   const repo = git(cwd);
-  if (repo !== undefined && grantable(repo.top)) checkout(repo);
-  else if (inside(cwd, scratchRoot)) write.push(join(scratchRoot, relative(scratchRoot, cwd).split(sep)[0]));
+  if (!(repo !== undefined && grantable(repo.top) && checkout(repo)) && inside(cwd, scratchRoot)) write.push(join(scratchRoot, relative(scratchRoot, cwd).split(sep)[0]));
   for (const tree of worktrees) {
     const owned = git(tree);
     if (owned !== undefined && owned.top === real(tree) && grantable(owned.top) && !write.includes(owned.top)) checkout(owned);
@@ -166,9 +183,9 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], 
   // Kept only while still the real folder the owner granted: a link swapped in for it later grants nothing.
   for (const dir of granted) {
     if (real(dir) !== dir || grantRefusal(dir, home) !== undefined || write.includes(dir)) continue;
+    if (dirname(dir) === scratchRoot) { write.push(dir); continue; }
     const owned = git(dir);
     if (owned !== undefined && owned.top === dir) checkout(owned);
-    else { write.push(dir); read.push(...REPO_READ_ONLY.map((p) => join(dir, p))); }
   }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
@@ -182,7 +199,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], 
  * The Seatbelt profile: everything as today except writes, which only the grants get, and
  * reads of Thomas's private folders. Later rules win. Paths enter as -D parameters, never as profile text.
  */
-function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
+export function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
   const params = [];
   const p = (path) => { params.push(`-D`, `P${params.length / 2}=${path}`); return `(param "P${params.length / 2 - 1}")`; };
   const rules = [
@@ -202,6 +219,8 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
       // An alternates file makes the owner's next unfenced gc drop every object the alternate store also has.
       `(deny file-write*${history.map((h) => ` (literal ${p(join(h, "info", "alternates"))}) (literal ${p(join(h, "info", "http-alternates"))})`).join("")})`,
     ] : []),
+    // direnv runs an .envrc unfenced when Thomas enters its folder; any case, as APFS opens `.ENVRC` as `.envrc`.
+    `(deny file-write* (regex #"/\\.[Ee][Nn][Vv][Rr][Cc]$"))`,
     // A grant's own folder cannot be deleted or renamed away, only its contents.
     ...(write.length ? [`(deny file-write-unlink${write.map((w) => ` (literal ${p(w)})`).join("")})`] : []),
     // Refused before macOS asks, so no "node wants to access your Desktop" prompt appears (Thomas, 24 Nov).
@@ -373,7 +392,7 @@ export function mayWrite(path, { write, read = [], reopen = [], locked = [], his
   // counts too: creating the parent folders would make it.
   const fold = (p) => p.normalize("NFD").toLowerCase();
   const folded = (roots) => under(roots.map(fold), fold(target));
-  return under(write) && (!folded(read) || folded(reopen)) && !folded(locked) && !folded(history);
+  return under(write) && (!folded(read) || folded(reopen)) && !folded(locked) && !folded(history) && !/\/\.envrc(\/|$)/i.test(target);
 }
 
 /**
@@ -386,7 +405,7 @@ export async function writeRefusal(path, { cwd, sessionId, env }) {
   const rules = await writeGrants({ cwd, sessionId, env });
   const target = toolPaths(path, { cwd, env }).find((t) => !mayWrite(t, rules));
   if (target === undefined) return undefined;
-  return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi). Only the owner can lift it, with /full-access.`;
+  return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi, .envrc). Only the owner can lift it, with /full-access.`;
 }
 
 /** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */

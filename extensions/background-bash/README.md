@@ -80,10 +80,14 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Workstream grants:** `node scripts/fence-grant.mjs <ws-id> <path>` (`--revoke <ws-id> <path>`, `--list [<ws-id>]`),
   run unfenced by Thomas (Terminal or a Run button), stores the folder's real path in
   `~/.pi-workbench/sandbox/grants/<ws-id>.json`, which no fence grants, so no agent (nor its `workstreams link`) can
-  grant itself a folder. A granted checkout gets a checkout's treatment (hooks, config and receipts read-only, history
-  rules); a plain folder is writable whole (its `AGENTS.md` and `.pi` read-only), git repos inside it included, so grant
-  checkouts one by one. Home, `~/IdeaProjects` itself, Pi's own state and `~/.pi-workbench` (except a `scratch/<ws>`
-  folder) are refused, and a granted path that later resolves elsewhere (a link swapped in) grants nothing.
+  grant itself a folder. Only a checkout under `~/IdeaProjects` (main checkout or linked worktree) or a Workstream
+  scratch folder (`scratch/<ws>`) may be granted; a plain folder is refused, and ignored if stored, because it would
+  make the git hooks of every repo inside it writable. A granted checkout gets a checkout's treatment (hooks, config and
+  receipts read-only, history rules); a granted path that later resolves elsewhere (a link swapped in) grants nothing.
+- **Checkouts are verified:** a `.git` file can name any repo's git folder, so a folder counts as a main checkout only
+  when its git folder is its own real `.git` directory, and as a linked worktree only when git's two links agree and
+  its metadata lies in `.git/worktrees` of a main checkout under `~/IdeaProjects`; otherwise its git folder gets no grant.
+- **`.envrc`:** no file named `.envrc` (any case, any depth) can be written: direnv runs it unfenced.
   `--backfill [--dry-run]` writes creation receipts for worktrees whose cleanup record names a Workstream but that were
   made unfenced, from that record (its sessions and Workstreams).
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,

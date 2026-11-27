@@ -17,6 +17,7 @@ const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "user.email=
 test("grant, list and revoke keep one real path per folder in the Workstream's grant file", () => {
   const app = join(home, "IdeaProjects", "app");
   mkdirSync(app, { recursive: true });
+  git(app, "init", "-q");
   assert.equal(grant(home, "ws-a", `${app}/../app`), app);
   grant(home, "ws-a", app);
   assert.deepEqual(list(home), { "ws-a": [app] });
