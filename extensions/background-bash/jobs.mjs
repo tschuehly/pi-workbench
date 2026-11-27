@@ -17,7 +17,7 @@ const MAX_RETAINED = 64;
 const KEEP_MS = 7 * 24 * 3600_000;
 export const MAX_LIFETIME_SECONDS = 12 * 3600;
 const RUNNER = fileURLToPath(new URL("./runner.mjs", import.meta.url));
-export const defaultRoot = () => process.env.PI_BACKGROUND_BASH_ROOT ?? join(homedir(), ".pi-workbench", "background-bash", "jobs");
+export const defaultRoot = (env = process.env) => env.PI_BACKGROUND_BASH_ROOT ?? join(env.HOME ?? homedir(), ".pi-workbench", "background-bash", "jobs");
 export const cleanOutput = (text) => stripVTControlCharacters(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 const readJson = (path) => { try { return JSON.parse(readFileSync(path, "utf8")); } catch { return undefined; } };
 const fileSize = (path) => { try { return statSync(path).size; } catch { return 0; } };

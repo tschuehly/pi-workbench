@@ -18,11 +18,11 @@ const entry = (home, id) => {
 };
 const exists = (p) => { try { lstatSync(p); return true; } catch { return false; } };
 
-/** The trash entries' restore records. */
+/** Every folder in the trash: its restore record, or `{ id, unknown: true }` when it has no readable one. */
 export function list(home) {
   let ids = [];
   try { ids = readdirSync(trash(home)); } catch { /* empty */ }
-  return ids.flatMap((id) => { try { return [{ ...entry(home, id), id }]; } catch { return []; } });
+  return ids.map((id) => { try { return { ...entry(home, id), id }; } catch { return { id, unknown: true }; } });
 }
 
 /** Moves entry `id`'s worktree and git folder back and lets git repair their links; returns the worktree path. */
@@ -39,7 +39,7 @@ export function restore(home, id) {
 
 /** Deletes entries moved more than `days` days ago; returns their IDs. */
 export function empty(home, days, now = Date.now()) {
-  const old = list(home).filter((r) => now - Date.parse(r.movedAt) > days * 86_400_000);
+  const old = list(home).filter((r) => !r.unknown && now - Date.parse(r.movedAt) > days * 86_400_000);
   for (const r of old) rmSync(join(trash(home), r.id), { recursive: true, force: true });
   return old.map((r) => r.id);
 }
@@ -50,7 +50,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     // Inside the fence the trash is unwritable anyway; refusing says why.
     if (alreadyFenced()) throw new Error("run it unfenced (Terminal or a Run button)");
     const home = homedir();
-    if (flag === "--list") for (const r of list(home)) console.log(`${r.id}\t${r.movedAt}\t${r.tree}\t${r.branch ?? "(detached)"}`);
+    if (flag === "--list") for (const r of list(home)) console.log(r.unknown ? `${r.id}\t(unknown: no readable restore.json; not restorable or emptied by this script)` : `${r.id}\t${r.movedAt}\t${r.tree}\t${r.branch ?? "(detached)"}`);
     else if (flag === "--restore" && value !== undefined) console.log(`restored ${restore(home, value)}`);
     else if (flag === "--empty-older-than" && /^\d+d$/.test(value ?? "")) console.log(`deleted ${empty(home, Number.parseInt(value, 10)).join(", ") || "nothing"}`);
     else throw new Error("usage: fence-trash.mjs --list | --restore <id> | --empty-older-than <N>d");

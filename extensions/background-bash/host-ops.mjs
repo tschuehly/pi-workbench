@@ -11,6 +11,7 @@ import { createServer } from "node:net";
 import { homedir, userInfo } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { defaultRoot } from "./jobs.mjs";
 import { CREATOR, linked, narrowed, workstreamId, workstreamOf } from "./sandbox.mjs";
 
 /** Folder of the `workstreams` and `wt` shims put first on a fenced command's PATH. */
@@ -131,11 +132,12 @@ function worktreeAt(top, projects) {
   return { top, gitDir, common, main: dirname(common) };
 }
 
-/** Folders of background commands still running (any Chat's), as their job records name them. */
-function runningFolders(home) {
-  const jobs = join(home, ".pi-workbench", "background-bash", "jobs");
-  let ids = [];
-  try { ids = readdirSync(jobs); } catch { return []; }
+/** Folders of background commands still running (any Chat's), as their job records name them; throws when the jobs root cannot be read. */
+function runningFolders(env) {
+  const jobs = defaultRoot(env);
+  let ids;
+  // The request comes from a running job, so its root exists: an unreadable one means the jobs are unknown.
+  try { ids = readdirSync(jobs); } catch (error) { throw new Error(`${jobs} cannot be read (${error.code})`); }
   return ids.flatMap((id) => {
     try {
       if (present(join(jobs, id, "exit"))) return [];
@@ -181,6 +183,42 @@ function headAt(gitDir, common) {
   return { head: SHA.test(head ?? "") ? head : undefined, branch: ref.slice(11) };
 }
 
+/** Why a running command or a Chat (per its fence-folder.json) works in or around `top`, or undefined. */
+function occupied(top, env, home) {
+  let busy;
+  try { busy = runningFolders(env).find((f) => f === top || inside(f, top)); } catch (error) { return `${error.message}, so running commands' folders are unknown`; }
+  if (busy !== undefined) return `a running command works in ${busy}`;
+  let folders;
+  try { folders = chatFolders(home); } catch (error) { return `${error.message}, so other Chats' folders are unknown`; }
+  const open = folders.find((f) => f === top || inside(f, top) || inside(top, f));
+  return open === undefined ? undefined : `a Chat works in ${open}`;
+}
+
+/**
+ * Every commit the worktree's own git folder keeps alive for `git gc`: HEAD's reflog and every per-worktree ref and
+ * reflog (refs/worktree/*, refs/bisect/*, logs/*, packed-refs); undefined when one cannot be read as such.
+ */
+function ownCommits(gitDir) {
+  const shas = new Set();
+  const files = (dir) => { let entries; try { entries = readdirSync(dir, { withFileTypes: true }); } catch (error) { if (error.code === "ENOENT") return []; throw error; } return entries.flatMap((e) => e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]); };
+  try {
+    for (const file of files(join(gitDir, "refs"))) {
+      const text = readFileSync(file, "utf8").trim();
+      if (SHA.test(text)) shas.add(text);
+      else if (!/^ref: refs\/\S+$/.test(text)) return undefined;
+    }
+    for (const file of [...files(join(gitDir, "logs")), join(gitDir, "packed-refs")]) {
+      for (const line of (readText(file) ?? "").split("\n")) {
+        if (line === "" || line.startsWith("#")) continue;
+        const [a, b] = line.split(" ", 2);
+        if (!SHA.test(a)) { if (line.startsWith("^") && SHA.test(line.slice(1))) continue; return undefined; }
+        for (const sha of [a, b]) if (SHA.test(sha ?? "") && !/^0+$/.test(sha)) shas.add(sha);
+      }
+    }
+  } catch { return undefined; }
+  return shas;
+}
+
 /** `owner/repo` of a github.com remote URL (https or ssh form), or undefined. */
 export const githubRepo = (url) => { const m = /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|(?:ssh:\/\/)?git@github\.com[:/])([\w-][\w.-]*)\/([\w-][\w.-]*?)(?:\.git)?\/?$/.exec(url ?? ""); return m === null ? undefined : `${m[1]}/${m[2]}`; };
 
@@ -202,7 +240,7 @@ async function unpushed(repo, shas, branches, env) {
 /**
  * `wt remove [path|branch]`: moves a linked worktree under ~/IdeaProjects and its git folder to
  * ~/.pi-workbench/trash/<id>/ (scripts/fence-trash.mjs restores or empties it), only if GitHub has its head and every
- * commit of its HEAD reflog on a branch, it is clean but for a top-level node_modules and .scratch/, and no Chat or
+ * commit of its HEAD reflog and its own refs on a branch, it is clean but for a top-level node_modules and .scratch/, and no Chat or
  * running command works in it; .scratch/ is copied to the owning Workstream's scratch folder first. The branch stays.
  * git status runs `narrowed` to the worktree's git folder (sandbox.mjs).
  */
@@ -230,23 +268,20 @@ async function removeWorktree(target, cwd, env, chat) {
   if (tree.error !== undefined) return no(tree.error);
   if (typeof chat !== "string" || chat === "") return no("this command's Chat folder is unknown");
   if (real(chat) === top || inside(real(chat), top)) return no(`${top} is this Chat's folder`);
-  const busy = runningFolders(home).find((f) => f === top || inside(f, top));
-  if (busy !== undefined) return no(`a running command works in ${busy}`);
-  let folders;
-  try { folders = chatFolders(home); } catch (error) { return no(`${error.message}, so other Chats' folders are unknown`); }
-  const open = folders.find((f) => f === top || inside(f, top) || inside(top, f));
-  if (open !== undefined) return no(`a Chat works in ${open}`);
+  const taken = occupied(top, env, home);
+  if (taken !== undefined) return no(taken);
   const { head, branch } = headAt(tree.gitDir, tree.common);
   if (head === undefined) return no(`${top} has no commit checked out`);
   // Only that file (no includes): the fence keeps <common>/config read-only, unlike remote-tracking refs.
   const url = await run("git", ["config", "--file", join(tree.common, "config"), "--get", "remote.origin.url"], { cwd: "/", env: { PATH: env.PATH ?? "/usr/bin:/bin" } });
   const repo = githubRepo(url.stdout.trim());
   if (repo === undefined) return no(`its origin (${url.stdout.trim() || "none"}) is no GitHub repository, so whether it is pushed cannot be checked`);
-  const shas = new Set([head]);
-  for (const line of (readText(join(tree.gitDir, "logs", "HEAD")) ?? "").split("\n")) for (const sha of line.split(" ", 2)) if (SHA.test(sha) && !/^0+$/.test(sha)) shas.add(sha);
+  const own = ownCommits(tree.gitDir);
+  if (own === undefined) return no(`a ref or reflog in ${tree.gitDir} cannot be read, so whether its commits are pushed cannot be checked`);
+  const shas = new Set([head, ...own]);
   const missing = await unpushed(repo, shas, branch === undefined ? [] : [branch], env);
   if (missing.error !== undefined) return no(missing.error);
-  if (missing.sha !== undefined) return no(`commit ${missing.sha.slice(0, 12)} of its HEAD history is on no branch of github.com/${repo}; push it first`);
+  if (missing.sha !== undefined) return no(`commit ${missing.sha.slice(0, 12)} of its HEAD history or worktree refs is on no branch of github.com/${repo}; push it first`);
   const fencedRun = (argv, write) => { const [file, ...args] = narrowed(argv, write, env); return run(file, args, { cwd: tree.main, env }); };
   const fencedGit = (args) => fencedRun(["git", "--no-optional-locks", "-C", top, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], [tree.gitDir]);
   const status = await fencedGit(["status", "--porcelain=v1", "-z", "--ignored", "--ignore-submodules=none"]);
@@ -278,7 +313,8 @@ async function removeWorktree(target, cwd, env, chat) {
   if (!unlinked(trash)) return no(`${trash} passes through a symbolic link`);
   // Same volume, so each move is one atomic rename: a write still under way lands in the trash, never lost.
   if ([top, tree.gitDir].some((p) => lstatSync(p).dev !== lstatSync(trash).dev)) return no(`${top} is on another volume than ${trash}`);
-  const id = `${new Date().toISOString().slice(0, 19).replace(/[-:]/g, "")}Z-${basename(tree.main)}-${basename(tree.gitDir)}`;
+  // restore.json keeps the real names; the ID only what fence-trash.mjs accepts.
+  const id = `${new Date().toISOString().slice(0, 19).replace(/[-:]/g, "")}Z-${basename(tree.main)}-${basename(tree.gitDir)}`.replace(/[^A-Za-z0-9._-]/g, "-");
   const dest = join(trash, id);
   if (rescued !== undefined) {
     // Copied, links as links, under the narrowed fence: a link swapped in for .scratch reads no hidden folder.
@@ -289,7 +325,12 @@ async function removeWorktree(target, cwd, env, chat) {
   // Again right before anything moves: the same worktree at the same real path, the same head.
   const again = worktreeAt(top, projects);
   if (again.error !== undefined || again.gitDir !== tree.gitDir) return fail(`wt remove: refused: ${again.error ?? `${top} changed`}; nothing was moved${kept}`);
-  if (headAt(tree.gitDir, tree.common).head !== head) return fail(`wt remove: refused: ${top} got a new commit meanwhile; nothing was moved${kept}`);
+  const after = ownCommits(tree.gitDir);
+  if (headAt(tree.gitDir, tree.common).head !== head || after === undefined || [...after].some((sha) => !shas.has(sha))) return fail(`wt remove: refused: ${top} got a new commit meanwhile; nothing was moved${kept}`);
+  // shortcut: rechecked after the slow gh calls, this narrows but does not close the window for a Chat or job to start
+  // in the worktree before the rename; acceptable because the move is reversible from the trash.
+  const late = occupied(top, env, home);
+  if (late !== undefined) return fail(`wt remove: refused: ${late}; nothing was moved${kept}`);
   try { mkdirSync(dest); } catch (error) { return fail(`wt remove: ${dest}: ${error.message}; nothing was moved${kept}`); }
   const restore = { id, movedAt: new Date().toISOString(), tree: top, gitDir: tree.gitDir, main: tree.main, branch, head, restore: `mv '${join(dest, "tree")}' '${top}' && mv '${join(dest, "gitdir")}' '${tree.gitDir}' && git -C '${tree.main}' worktree repair '${top}' (or: node scripts/fence-trash.mjs --restore ${id})` };
   writeFileSync(join(dest, "restore.json"), `${JSON.stringify(restore, null, 1)}\n`, { flag: "wx" });

@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
-import { empty, restore } from "../../scripts/fence-trash.mjs";
+import { empty, list, restore } from "../../scripts/fence-trash.mjs";
 import { githubRepo, handle } from "./host-ops.mjs";
 
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -27,6 +27,8 @@ const bin = join(root, "bin");
 mkdirSync(bin);
 writeFileSync(join(bin, "gh"), `#!/bin/sh
 [ -n "$FAKE_GH_FAIL" ] && { echo "gh: HTTP 401" >&2; exit 1; }
+# A job or Chat that starts in the worktree while gh runs.
+[ -n "$FAKE_GH_WRITE" ] && { mkdir -p "$(dirname "$FAKE_GH_WRITE")"; printf '%s' "$FAKE_GH_BODY" > "$FAKE_GH_WRITE"; }
 case "$2" in
   repos/acme/app) echo main ;;
   repos/acme/app/compare/*) bh=\${2#*/compare/}; b=\${bh%...*}; sha=\${bh##*...}
@@ -36,6 +38,9 @@ case "$2" in
 esac
 `, { mode: 0o755 });
 const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" };
+delete env.PI_BACKGROUND_BASH_ROOT;
+const jobsRoot = join(home, ".pi-workbench", "background-bash", "jobs");
+mkdirSync(jobsRoot, { recursive: true });
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, "-c", "commit.gpgsign=false", ...args], { encoding: "utf8", env }).trim();
 git(root, "init", "-q", "--bare", "-b", "main", origin);
 git(root, "clone", "-q", origin, main);
@@ -104,7 +109,7 @@ test("wt remove moves a pushed, clean worktree and its git folder to the trash w
 
 test("wt remove refuses unless GitHub has every commit: an unpushed head, an unpushed commit only in the HEAD reflog, a forged tracking ref, a non-GitHub origin, a failing gh", async () => {
   worktree("unpushed", { push: false });
-  await refused("unpushed", /commit [0-9a-f]{12} of its HEAD history is on no branch of github\.com\/acme\/app; push it first/);
+  await refused("unpushed", /commit [0-9a-f]{12} of its HEAD history or worktree refs is on no branch of github\.com\/acme\/app; push it first/);
   const r = worktree("reflogged");
   writeFileSync(join(r.top, "lost.txt"), "x\n");
   git(r.top, "add", "-A");
@@ -115,7 +120,7 @@ test("wt remove refuses unless GitHub has every commit: an unpushed head, an unp
   const s = worktree("stale");
   git(s.top, "commit", "-q", "--allow-empty", "-m", "local");
   git(main, "update-ref", "refs/remotes/origin/stale", "stale");
-  await refused("stale", /of its HEAD history is on no branch/);
+  await refused("stale", /of its HEAD history or worktree refs is on no branch/);
   worktree("plain");
   git(main, "remote", "set-url", "origin", "https://gitlab.com/acme/app.git");
   try { await refused("plain", /its origin \(https:\/\/gitlab\.com\/acme\/app\.git\) is no GitHub repository/); } finally { git(main, "remote", "set-url", "origin", "https://github.com/acme/app.git"); }
@@ -143,7 +148,7 @@ test("wt remove refuses local data: a tracked change, an untracked file, an igno
 test("wt remove refuses where a Chat works: this Chat's folder, a running command's, another Chat's stored folder in or around it, an unreadable Chat store", async () => {
   const w = worktree("busy");
   await refused("busy", /is this Chat's folder/, { from: join(w.top, "sub") });
-  const jobs = join(home, ".pi-workbench", "background-bash", "jobs", "j1");
+  const jobs = join(jobsRoot, "j1");
   mkdirSync(jobs, { recursive: true });
   writeFileSync(join(jobs, "job.json"), JSON.stringify({ cwd: chat, folder: w.top, expiresAt: Date.now() + 60_000 }));
   await refused("busy", /a running command works in .*app\.worktrees\/busy/);
@@ -171,4 +176,64 @@ test("wt remove refuses with the reason: the main checkout, a path through a sym
   assert.match((await remove("linked")).stderr, /is locked/);
   assert.match((await handle({ argv: ["wt", "remove", "--force", "linked"], cwd: main }, env, [], chat)).stderr, /wt remove --force: is not available inside the sandbox/);
   assert.ok(existsSync(join(w.top, ".git")));
+});
+
+test("wt remove reads running jobs from PI_BACKGROUND_BASH_ROOT as jobs.mjs does, and refuses when that root cannot be read", async () => {
+  const w = worktree("custom-root");
+  const custom = join(root, "custom-jobs");
+  mkdirSync(join(custom, "j2"), { recursive: true });
+  writeFileSync(join(custom, "j2", "job.json"), JSON.stringify({ cwd: w.top, expiresAt: Date.now() + 60_000 }));
+  await refused("custom-root", /a running command works in .*app\.worktrees\/custom-root/, { e: { ...env, PI_BACKGROUND_BASH_ROOT: custom } });
+  await refused("custom-root", /missing-jobs cannot be read \(ENOENT\), so running commands' folders are unknown/, { e: { ...env, PI_BACKGROUND_BASH_ROOT: join(root, "missing-jobs") } });
+  assert.ok(existsSync(join(w.top, ".git")));
+});
+
+test("wt remove checks again right before moving: a job or a Chat that started in the worktree during the GitHub calls stops it", async () => {
+  const w = worktree("late");
+  const starts = [
+    [join(jobsRoot, "j-late", "job.json"), { cwd: chat, folder: w.top, expiresAt: Date.now() + 60_000 }, /a running command works in .*app\.worktrees\/late/],
+    [join(stores, "chat-late", "fence-folder.json"), { cwd: w.top, folder: w.top }, /a Chat works in .*app\.worktrees\/late/],
+  ];
+  for (const [file, body, why] of starts) {
+    const result = await remove("late", { e: { ...env, FAKE_GH_WRITE: file, FAKE_GH_BODY: JSON.stringify(body) } });
+    assert.equal(result.code, 2, result.stderr);
+    assert.match(result.stderr, why);
+    assert.match(result.stderr, /; nothing was moved\n$/);
+    assert.ok(existsSync(join(w.top, ".git")));
+    rmSync(dirname(file), { recursive: true });
+  }
+  assert.equal((await remove("late")).code, 0);
+});
+
+test("wt remove requires GitHub to have every commit of the worktree's own refs (refs/worktree/keep), not only HEAD's history", async () => {
+  const w = worktree("kept");
+  const loose = git(w.top, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "keep");
+  git(w.top, "update-ref", "refs/worktree/keep", loose);
+  assert.ok(existsSync(join(w.meta, "refs", "worktree", "keep")));
+  await refused("kept", new RegExp(`commit ${loose.slice(0, 12)} of its HEAD history or worktree refs is on no branch`));
+  git(w.top, "update-ref", "refs/worktree/keep", git(main, "rev-parse", "main"));
+  const result = await remove("kept");
+  assert.equal(result.code, 0, result.stderr);
+});
+
+test("wt remove of a repo whose name has a space: the trash ID is sanitized, listed and restorable, restore.json keeps the real paths", async () => {
+  const spaced = join(projects, "my app");
+  git(root, "clone", "-q", origin, spaced);
+  git(spaced, "remote", "set-url", "origin", "https://github.com/acme/app.git");
+  git(spaced, "remote", "set-url", "--push", "origin", origin);
+  const top = join(projects, "my app.worktrees", "spaced");
+  git(spaced, "worktree", "add", "-q", "-b", "spaced", top);
+  git(top, "commit", "-q", "--allow-empty", "-m", "spaced");
+  git(top, "push", "-q", "origin", "spaced");
+  const result = await remove("spaced", { cwd: spaced });
+  assert.equal(result.code, 0, result.stderr);
+  const entry = list(home).find((r) => r.tree === top);
+  assert.ok(entry, "listed");
+  assert.match(entry.id, /^\d{8}T\d{6}Z-my-app-spaced$/);
+  assert.equal(entry.main, spaced);
+  mkdirSync(join(trash, "stray folder"));
+  assert.ok(list(home).some((r) => r.id === "stray folder" && r.unknown), "a folder without restore.json is listed as unknown");
+  assert.equal(restore(home, entry.id), top);
+  assert.equal(git(top, "rev-parse", "--abbrev-ref", "HEAD"), "spaced");
+  rmSync(join(trash, "stray folder"), { recursive: true });
 });
