@@ -57,6 +57,15 @@ Prove this with `npm --prefix packages/durable-pilot run test:bash-atelier` (ins
 and its Chromium once with `cd packages/durable-pilot && npx playwright install chromium`). Tests use seconds, disposable
 hosts, a real detached browser, an unrelated sentinel, restart fault windows, cancellation and Worker continuation.
 
+## Command check (cc-safety-net)
+
+Before a command starts, `safety-net.mjs` asks [cc-safety-net](https://github.com/kenryu42/cc-safety-net) (pinned in
+the root `package.json`) and refuses it on a deny: background bash here, a Durable Chat's `bash` (lead and children)
+and every Monitor launch (`monitor-policy.mjs`). Owner runs (pi-run) are not checked. The level comes from
+`~/.cc-safety-net/policy.json` (strict on Thomas's Mac, linked by tschuehly-config's `pi/link.sh`), the file the
+package's own Pi extension reads in terminal Pi, which also covers the native `bash` of Subagents and Workers. Strict
+refuses `rm -rf $UNSET/*` and also `rm -rf "$PI_TMP/x"` / `"$TMPDIR/x"`: write the literal PI_TMP path instead.
+
 ## Write fence (macOS)
 
 On macOS the runner starts every command under Apple's `/usr/bin/sandbox-exec` with a Seatbelt profile built in

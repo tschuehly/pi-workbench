@@ -492,7 +492,8 @@ if [[ ${1:-} == switch-web ]]; then
     launchctl bootout "gui/$(id -u)/$LABEL.web" 2>/dev/null || true
     local holders; for _ in $(seq 50); do holders=$(lsof -ti tcp:$PORT -sTCP:LISTEN 2>/dev/null) || :; [[ -z $holders ]] && break; sleep 0.1; done
     [[ -z $holders ]] || { echo "port $PORT still occupied; not signalling its holder" >&2; return 1; }
-    launchctl bootstrap "gui/$(id -u)" "$web" || return 1
+    # bootout returns before launchd forgets the job; a bootstrap in that window fails with EIO (5), so retry.
+    local _b; for _b in $(seq 20); do launchctl bootstrap "gui/$(id -u)" "$web" && break; [[ $_b == 20 ]] && return 1; sleep 0.5; done
     for _ in $(seq 60); do healthy && return 0; sleep 1; done; return 1
   }
   if swap "$lwb-${pw##*-}" "$job/new-web.plist"; then
@@ -669,6 +670,8 @@ stop_all() {
   echo "refusing: port $PORT or $DATA/sessiond.sock still held after launchd bootout (PIDs: \$(holders | tr '\n' ' ')); not signalling them"
   return 1
 }
+# bootout returns before launchd forgets the job; bootstrapping the label in that window fails with EIO (5), so retry.
+boot() { for _ in \$(seq 20); do launchctl bootstrap gui/$uid "\$1" && return 0; sleep 0.5; done; return 1; }
 PORT=$PORT
 $(declare -f healthy)
 STORE=$(printf %q "$STORE") PROJECTS=$(printf %q "$PROJECTS") SUFFIX=$SUFFIX
@@ -696,7 +699,7 @@ rollback() {
   done
   compgen -G "$job/backup/$LABEL.*.plist" >/dev/null || { rm "$STORE/in-progress"; echo "rollback done \$(date -u +%FT%TZ): no previous Durable instance"; exit 1; }
   boot_failed=0
-  for f in "\$la"/$LABEL.*.plist; do launchctl bootstrap gui/$uid "\$f" || boot_failed=1; done
+  for f in "\$la"/$LABEL.*.plist; do boot "\$f" || boot_failed=1; done
   if [[ \$boot_failed == 1 ]]; then echo "ROLLBACK FAILED: old service bootstrap"; exit 4; fi
   for i in \$(seq 90); do
     if healthy; then rm "$STORE/in-progress"; echo "rollback done \$(date -u +%FT%TZ)"; exit 1; fi
@@ -714,7 +717,7 @@ relink "$DATA/plugins/pi-workbench" "$PROJECTS/pi-workbench$SUFFIX/packages"
 [[ -e "$DATA/config.json" ]] || { echo '{}' >"$DATA/config.json.new" && mv "$DATA/config.json.new" "$DATA/config.json"; }
 stop_all || rollback
 cp -p "$job"/new/$LABEL.*.plist "\$la/" || rollback
-for s in sessiond web; do launchctl bootstrap gui/$uid "\$la/$LABEL.\$s.plist" || rollback; done
+for s in sessiond web; do boot "\$la/$LABEL.\$s.plist" || rollback; done
 for i in \$(seq 90); do healthy && { rm "$STORE/in-progress"; echo "promoted \$(date -u +%FT%TZ)"; trap 'launchctl bootout gui/$uid/$label' EXIT; rm -f "$LOCK"; exec 9>&-; "$self" prune --apply || true; exit 0; }; sleep 1; done
 rollback
 EOF

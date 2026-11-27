@@ -59,5 +59,8 @@
       "./prompts"
     ]
   },
-  "packageManager": "pnpm@12.21.0"
+  "packageManager": "pnpm@12.21.0",
+  "dependencies": {
+    "cc-safety-net": "2.8.3"
+  }
 }

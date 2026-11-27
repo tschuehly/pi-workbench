@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { registerMonitorPolicy } from "./monitor-policy.mjs";
 import { createBackgroundBashJobs } from "./jobs.mjs";
 import { piTmpDir } from "../pi-tmp/pitmp.mjs";
+import { refuseUnsafe } from "./safety-net.mjs";
 
 // A foreground call waits this long, then continues as a background job so the agent is never stuck.
 const FOREGROUND_WAIT_MS = 30_000;
@@ -55,6 +56,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       foreground: Type.Optional(Type.Boolean({ description: "Wait up to 30 seconds for output and exit status, then continue in the background; default false" })),
     }),
     async execute(id, params, signal, onUpdate, ctx) {
+      refuseUnsafe(params.command, ctx.cwd);
       // One-shot modes settle as soon as the tool returns; never detach their result.
       if (ctx.mode === "print" || ctx.mode === "json") {
         return foreground.execute(id, { command: params.command, ...(params.timeout === undefined ? {} : { timeout: params.timeout }) }, signal, onUpdate, ctx);
