@@ -82,14 +82,15 @@ After a promotion the same labels and PIDs are still there, with their old `revi
 
 ```bash
 P=~/IdeaProjects/pi-workbench.durable-installed/scripts/promote-installed
-$P --instance durable switch <wb-sha> <pw-sha>              # full: both services
-$P --instance durable switch-workbench <wb-sha>             # Workbench plugin and skills only
-$P --instance durable switch-web <pw-sha>                   # PI WEB web/API only
+$P current                                                  # the installed pair: <wb-sha> <pw-sha>
+$P switch <wb-sha> <pw-sha> --from <live-wb> <live-pw>      # full: both services; --from is what `current` printed
+$P switch-workbench <wb-sha> --from <live-wb> <live-pw>      # Workbench plugin and skills only
+$P switch-web <pw-sha> --from <live-wb> <live-pw>            # PI WEB web/API only
 ```
 
 - `switch` keeps Durable Chats running: it restarts only `com.pi-web-durable.sessiond` and `.web`, never a `com.pi-workbench.durable-host.*` job. Streams, subagents, Workers, background bash and open questions go on in their hosts; the new daemon reattaches every host and browsers reconnect. Chats opened before the first switch with launchd hosts ran as the daemon's children; that one switch still closes them, and they reopen paused.
   - Before it changes anything, `switch` checks that the new daemon can reattach every running host: same host protocol as each host's revision folder, and launchd hosts on. Otherwise it refuses (exit 7, nothing changed) and lists the families, e.g. `com.pi-workbench.durable-host.<family>: protocol 2, revision <folder>`. The job checks again when it starts. Close those Chats first, or wait for C3's family upgrade; `--force` does not skip this check.
-  - It refuses (exit 3) while the Durable daemon itself has subagents, workers or commands under it; hosts and their children do not count. `--force` (after `--instance durable`) skips that check.
+  - It refuses (exit 3) while the Durable daemon itself has subagents, workers or commands under it; hosts and their children do not count. `--force` (first argument) skips that check.
   - New families start on the new build's Durable host from this switch on; running families keep their revision.
 - `switch-workbench` interrupts nothing: it repoints `pi-workbench.durable-installed`. The running daemon keeps the Durable host it started with until the next `switch`.
 - `switch-web` restarts only `com.pi-web-durable.web`; browsers reconnect. It refuses (exit 5) when the session daemon's code changed; use `switch` then.
@@ -100,7 +101,7 @@ Each successful command prunes `~/.pi-workbench/installed-durable/` (keeps live,
 
 - Automatic: a `switch` whose services do not become healthy in 90 s restores the previous Durable plists, links and plugin link, boots them and checks health (`rollback done` in the job log, exit 1; `ROLLBACK FAILED` means exit 4: check `~/.pi-web-durable/logs/`). It never touches a host: the restored daemon reattaches them.
 - To the previous revision (after 1.5.2, see the two-step rule below): each command prints its `roll back:` line; for `switch`, use the `wb=` and `pw=` of the earlier `start` line in `~/.pi-workbench/installed-durable/jobs/*/job.log`:
-  `$P --instance durable switch <previous-wb-sha> <previous-pw-sha>`
+  `$P --allow-downgrade switch <previous-wb-sha> <previous-pw-sha> --from <live-wb> <live-pw>`
 - Back to the legacy instance: `launchctl enable gui/$(id -u)/com.pi-web.sessiond; launchctl enable gui/$(id -u)/com.pi-web.web`, bootstrap both `~/Library/LaunchAgents/com.pi-web.*.plist`, then open http://127.0.0.1:8505/; Durable Chats stay readable on :8506. To stop the Durable instance:
   `launchctl bootout gui/$(id -u)/com.pi-web-durable.web; launchctl bootout gui/$(id -u)/com.pi-web-durable.sessiond`
   Its hosts keep running (and keep working) until stopped one by one, which interrupts that family's Chats: `launchctl bootout gui/$(id -u)/com.pi-workbench.durable-host.<family>` for each label from `launchctl list` above.

@@ -29,7 +29,7 @@ test("prune keeps live, the last switched-away build, named and used builds, and
   mkdirSync(join(home, ".pi-workbench/workstreams"), { recursive: true });
   writeFileSync(join(home, ".pi-workbench/workstreams/workstreams.json"), JSON.stringify({ ref: `${a}/notes.md` }));
   const worker = spawn("sleep", ["30"], { cwd: b });
-  const prune = (...args) => spawnSync("bash", [script, "prune", ...args], { encoding: "utf8", env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: home } });
+  const prune = (...args) => spawnSync("bash", [script, "prune", ...args], { encoding: "utf8", env: { ...process.env, HOME: home, PI_WORKBENCH_PROJECTS: home, PI_PROMOTE_ETIME_PS: "true" } });
   try {
     const dry = prune();
     assert.equal(dry.status, 0, dry.stderr);

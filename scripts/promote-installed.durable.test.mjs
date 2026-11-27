@@ -2,7 +2,7 @@
 // promotes and rolls back only its own links, plists and folders.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
@@ -11,24 +11,37 @@ const script = new URL("./promote-installed", import.meta.url).pathname;
 const put = (path, data) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); };
 const wbRev = (n) => `${"a".repeat(11)}${n}0000`, pwRev = (n) => `${"b".repeat(11)}${n}0000`;
 const short = (rev) => rev.slice(0, 12);
+/** The build a *.durable-installed link resolves to: through <store>/current/<product>, or directly (the old layout). */
+const resolve = (link) => { const t = readlinkSync(link); return lstatSync(t).isSymbolicLink() ? readlinkSync(t) : t; };
 
 function harness() {
   const root = mkdtempSync(join(tmpdir(), "promote-durable-"));
   const home = join(root, "home"), projects = join(root, "projects"), bin = join(root, "bin");
   const la = join(home, "Library/LaunchAgents");
   const store = join(home, ".pi-workbench/installed-durable"), data = join(home, ".pi-web-durable");
-  const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
+  // Commands that may leave a detached child behind log when they inherit the writer lock's fd 9.
+  const fd9 = (name) => (["git", "pnpm", "npm", "cp", "launchctl"].includes(name) ? `[ -e /dev/fd/9 ] && echo "${name} $*" >> "$HOME/fd9.log"\n` : "");
+  const shim = (name, body) => { put(join(bin, name), `#!/bin/sh\n${fd9(name)}${body}\n`); spawnSync("chmod", ["+x", join(bin, name)]); };
   // git: rev-parse echoes the revision; worktree add makes the folder (with the Durable host's package for pi-workbench).
   shim("git", `case "$3" in rev-parse) r="$5"; echo "\${r%^{commit\\}}";;
-  worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac; fi;; esac`);
+  worktree) if [ "$4" = add ]; then mkdir -p "$6"; case "$6" in */pi-workbench-*) mkdir -p "$6/packages/durable-pilot/src";; esac
+    # LOCKFILE: the revision has pnpm lockfiles with that content.
+    if [ -n "$LOCKFILE" ]; then echo "$LOCKFILE" > "$6/pnpm-lock.yaml"; if [ -d "$6/packages/durable-pilot" ]; then echo "$LOCKFILE" > "$6/packages/durable-pilot/pnpm-lock.yaml"; fi; fi; fi;; esac`);
+  shim("pnpm", `echo "pnpm $1 $PWD" >> "$HOME/npm.log"; mkdir -p node_modules/node-pty/prebuilds/x && touch node_modules/node-pty/prebuilds/x/spawn-helper && echo "$PWD" > node_modules/installed-in`);
+  shim("cp", `[ -n "$FAIL_CP" ] && exit 1; exec /bin/cp "$@"`);
   shim("npm", `echo "$1 $PWD" >> "$HOME/npm.log"
   case "$1" in ci) mkdir -p node_modules/node-pty/prebuilds/x && touch node_modules/node-pty/prebuilds/x/spawn-helper;;
   run) mkdir -p dist/server/sessions && echo web > dist/server/index.js && echo lock > package-lock.json
     # NO_LAUNCHD: a PI WEB build from before Phase C1; PROTOCOL: the Durable host protocol its daemon speaks.
     if [ -n "$NO_LAUNCHD" ]; then echo daemon > dist/server/sessiond.js; else echo 'daemon env["PI_WEB_DURABLE_HOST_LAUNCHD"]' > dist/server/sessiond.js; fi
     echo "export const DURABLE_HOST_PROTOCOL = \${PROTOCOL:-2};" > dist/server/sessions/durableChatService.js;; esac`);
-  shim("launchctl", `echo "$*" >> "$HOME/launchctl.log"`);
-  shim("lsof", `echo "$*" >> "$HOME/lsof.log"`);
+  // print: a scheduled switch job runs while $HOME/job-running exists.
+  shim("launchctl", `if [ "$CRASH_WEB" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.web) kill -KILL "$PPID";; esac; fi
+  if [ "$CRASH_STOP" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.sessiond) kill -KILL "$PPID";; esac; fi
+  if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
+  shim("lsof", `echo "$*" >> "$HOME/lsof.log"; case "$*" in *tcp:*) echo "$FOREIGN_PID";; esac`);
+  // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
+  shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
   shim("sleep", "exit 0");
   // Job folders are named by the second; give each switch its own.
   shim("date", `case "$*" in *%Y%m%dT*) n=$(cat "$HOME/dates" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$HOME/dates"; echo "20261117T0000\${n}Z";; *) exec /bin/date "$@";; esac`);
@@ -47,6 +60,8 @@ function harness() {
     PI_PROMOTE_PS: `cat ${ps}`, PI_PROMOTE_ETIME_PS: `cat ${ps}`, PI_PROMOTE_ZSH: "/bin/zsh",
   };
   const run = (args, extra = {}) => spawnSync("bash", [script, ...args], { env: { ...env, ...extra }, encoding: "utf8" });
+  /** Schedule a switch from the pair installed now, as a Chat proposes it. */
+  const sw = (wb, pw, extra = {}, delay = ["0"]) => run(["switch", wb, pw, "--from", ...run(["current"], extra).stdout.trim().split(" "), ...delay], extra);
   // Each path: file bytes and mtime, link target, or folder.
   const snapshot = (paths) => {
     const out = {};
@@ -65,13 +80,14 @@ function harness() {
   const plist = (s) => JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(la, `com.pi-web-durable.${s}.plist`)], { encoding: "utf8" }).stdout);
   /** Schedule a durable switch, then run its job as launchd would. */
   const switchDurable = (wb, pw, extra = {}) => {
-    const scheduled = run(["switch", wb, pw, "0"], extra);
+    const scheduled = sw(wb, pw, extra);
     assert.equal(scheduled.status, 0, scheduled.stderr);
     const jobs = join(store, "jobs"), latest = readdirSync(jobs).sort().at(-1);
     const job = spawnSync("bash", [join(jobs, latest, "job.sh")], { env: { ...env, ...extra }, encoding: "utf8" });
     return { scheduled, status: job.status, log: readFileSync(join(jobs, latest, "job.log"), "utf8") };
   };
-  return { root, home, projects, la, store, data, env, run, durable, snapshot, log, plist, switchDurable };
+  const partial = (cmd, rev, extra) => run([cmd, rev, "--from", ...run(["current"]).stdout.trim().split(" ")], extra);
+  return { root, home, projects, la, store, data, env, run, sw, partial, bin, durable, snapshot, log, plist, switchDurable };
 }
 
 /**
@@ -102,7 +118,7 @@ const legacyLabels = /com\.pi-web\.(web|sessiond|ui-dev)\b/; // the old non-Dura
 
 test("the Durable instance installs from clean folders, promotes twice and rolls back a failed health check", () => {
   const h = harness();
-  const links = () => ["pi-workbench", "pi-web"].map((p) => readlinkSync(join(h.projects, `${p}.durable-installed`)));
+  const links = () => ["pi-workbench", "pi-web"].map((p) => resolve(join(h.projects, `${p}.durable-installed`)));
   const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
   assert.ok(!existsSync(h.store));
 
@@ -111,6 +127,8 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
   assert.equal(install.status, 0, install.log);
   assert.match(install.log, /promoted/);
   assert.deepEqual(links(), [build("pi-workbench", wbRev(1)), build("pi-web", pwRev(1))]);
+  for (const p of ["pi-workbench", "pi-web"]) assert.equal(readlinkSync(join(h.projects, `${p}.durable-installed`)), join(h.store, "current", p));
+  assert.equal(readlinkSync(join(h.store, "current")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
   assert.match(h.log("npm.log"), new RegExp(`ci ${build("pi-workbench", wbRev(1))}\nci ${build("pi-workbench", wbRev(1))}/packages/durable-pilot\n`));
   assert.equal(readlinkSync(join(h.data, "plugins/pi-workbench")), join(h.projects, "pi-workbench.durable-installed/packages"));
   assert.equal(readFileSync(join(h.data, "config.json"), "utf8"), "{}\n");
@@ -156,17 +174,134 @@ test("the Durable instance installs from clean folders, promotes twice and rolls
 
   // switch-workbench and switch-web move only the Durable links and web service.
   const plists = h.durable();
-  const wb = h.run(["switch-workbench", wbRev(5)]);
+  const wb = h.partial("switch-workbench", wbRev(5));
   assert.equal(wb.status, 0, wb.stderr);
-  assert.match(wb.stdout, /roll back: .* switch-workbench aaaaaaaaaaa3/);
-  assert.equal(readlinkSync(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
-  const web = h.run(["switch-web", pwRev(5)]);
+  assert.match(wb.stdout, /roll back: .* --allow-downgrade switch-workbench aaaaaaaaaaa3 --from aaaaaaaaaaa5 bbbbbbbbbbb3/);
+  assert.equal(resolve(join(h.projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(5)));
+  const web = h.partial("switch-web", pwRev(5));
   assert.equal(web.status, 0, web.stderr);
-  assert.match(web.stdout, /roll back: .* switch-web bbbbbbbbbbb3/);
+  assert.match(web.stdout, /roll back: .* --allow-downgrade switch-web bbbbbbbbbbb3 --from aaaaaaaaaaa5 bbbbbbbbbbb5/);
   assert.equal(h.plist("web").ProgramArguments[3], `exec node '${build("pi-web", pwRev(5))}/dist/server/index.js'`);
   const sessiond = relative(h.root, join(h.la, "com.pi-web-durable.sessiond.plist"));
   assert.equal(h.durable()[sessiond], plists[sessiond]);
   assert.doesNotMatch(h.log("launchctl.log"), legacyLabels);
+});
+
+test("switch needs the live pair (--from), refuses a stale one, and one promotion at a time holds the lock", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const jobs = () => readdirSync(join(h.store, "jobs")).length, lock = join(h.store, "promote.lock");
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+  const missing = h.run(["switch", wbRev(2), pwRev(2)]);
+  assert.equal(missing.status, 2);
+  assert.match(missing.stderr, /--from <live-workbench-rev> <live-pi-web-rev>[\s\S]*installed now: aaaaaaaaaaa1 bbbbbbbbbbb1/);
+
+  // A pair read before another Chat switched: refused, nothing changed, the lock released.
+  for (const [cmd, rev] of [["switch-workbench", wbRev(2)], ["switch-web", pwRev(2)]]) {
+    assert.equal(h.run([cmd, rev]).status, 2);
+    assert.equal(h.run([cmd, rev, "--from", "none", "none"]).status, 8);
+  }
+  const before = instanceState(h);
+  for (const from of [["none", "none"], [short(wbRev(1)), short(pwRev(2))], ["main", short(pwRev(1))]]) {
+    const stale = h.run(["switch", wbRev(2), pwRev(2), "--from", ...from, "0"]);
+    assert.equal(stale.status, 8, stale.stderr);
+    assert.match(stale.stderr, /installed now is aaaaaaaaaaa1 bbbbbbbbbbb1[\s\S]*fresh approval/);
+  }
+  assert.equal(h.run(["switch", wbRev(2), pwRev(2), "--from", wbRev(1).slice(0, 7), pwRev(1), "0"]).status, 0, "a prefix or full revision matches");
+  assert.equal(jobs(), 2);
+  assert.deepEqual(instanceState(h), before);
+
+  // The scheduled job holds the lock while it runs: every other promotion fails fast.
+  writeFileSync(join(h.home, "job-running"), "");
+  for (const args of [["switch", wbRev(3), pwRev(3), "--from", short(wbRev(1)), short(pwRev(1)), "0"], ["switch-workbench", wbRev(3), "--from", wbRev(1), pwRev(1)], ["switch-web", pwRev(3), "--from", wbRev(1), pwRev(1)], ["prune", "--apply"], ["prepare", wbRev(4), pwRev(4)]]) {
+    const busy = h.run(args);
+    assert.equal(busy.status, 6, `${args[0]}: ${busy.stderr}`);
+    assert.match(busy.stderr, /another promotion is in progress \(queued com\.pi-workbench\.promote-installed-durable\.[\s\S]*current/);
+  }
+  assert.ok(existsSync(join(h.store, `releases/${short(wbRev(2))}-${short(pwRev(2))}/pi-web`)), "pending release survives prune");
+  assert.equal(jobs(), 2);
+  // Its end releases the lock.
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.ok(!existsSync(lock));
+
+  // A live holder blocks; a dead one is taken over.
+  put(join(lock, "owner"), `pid ${process.pid}\n`);
+  assert.equal(h.partial("switch-workbench", wbRev(3)).status, 6);
+  put(join(lock, "owner"), `pid ${deadPid()}\n`);
+  const takeover = h.partial("switch-workbench", wbRev(3));
+  assert.equal(takeover.status, 0, takeover.stderr);
+  assert.match(takeover.stderr, /taking over a stale promotion lock/);
+  assert.ok(!existsSync(lock));
+});
+
+test("another scheduler cannot acquire a stale reservation between inspection and removal", () => {
+  const h = harness(), lock = join(h.store, "promote.lock");
+  put(join(lock, "owner"), `pid ${deadPid()}\n`);
+  // At the old race window the second process would also take over, then lose its reservation to the first.
+  put(join(h.bin, "rm"), `#!/bin/sh
+if [ "$2" = "${lock}" ] && [ -z "$CONTENDER" ]; then
+  CONTENDER=1 /bin/bash "${script}" switch ${wbRev(2)} ${pwRev(2)} --from none none 0 >/dev/null 2>&1
+  echo $? > "$HOME/contender-status"
+fi
+exec /bin/rm "$@"\n`);
+  spawnSync("chmod", ["+x", join(h.bin, "rm")]);
+  assert.equal(h.sw(wbRev(1), pwRev(1)).status, 0);
+  assert.equal(h.log("contender-status"), "6\n");
+  assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
+  assert.ok(lstatSync(lock).isSymbolicLink(), "releasing the reservation takes one unlink");
+});
+
+test("a displaced queued job cannot run or unlock its replacement", () => {
+  const h = harness();
+  assert.equal(h.sw(wbRev(1), pwRev(1)).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs"))[0]);
+  assert.equal(h.sw(wbRev(2), pwRev(2)).status, 0); // first job no longer registered
+  const owner = join(h.store, "promote.lock/owner"), next = readFileSync(owner, "utf8");
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 6);
+  assert.equal(readFileSync(owner, "utf8"), next);
+  assert.equal(h.run(["current"]).stdout, "none none\n");
+});
+
+test("a foreign listener survives a failed stop and the new pair is not installed", () => {
+  const h = harness(), foreign = spawn("/bin/sleep", ["60"]);
+  try {
+    assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+    const r = h.switchDurable(wbRev(2), pwRev(2), { FOREIGN_PID: String(foreign.pid) });
+    assert.notEqual(r.status, 0);
+    assert.match(r.log, /still held after launchd bootout.*not signalling/);
+    process.kill(foreign.pid, 0);
+    assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+  } finally { foreign.kill(); }
+});
+
+test("switch waits 3 seconds by default", () => {
+  const h = harness();
+  assert.equal(h.sw(wbRev(1), pwRev(1), {}, []).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  assert.match(readFileSync(join(job, "job.sh"), "utf8"), /\nsleep 3\n/);
+});
+
+test("prepare clones node_modules from a prepared build with the same lockfile, else installs", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  const dirs = (n) => [build("pi-workbench", wbRev(n)), join(build("pi-workbench", wbRev(n)), "packages/durable-pilot"), build("pi-web", pwRev(n))];
+  const installs = () => h.log("npm.log").split("\n").filter((l) => l.startsWith("pnpm "));
+  const prepare = (n, extra) => { const r = h.run(["prepare", wbRev(n), pwRev(n)], extra); assert.equal(r.status, 0, r.stderr); return r; };
+  prepare(1, { LOCKFILE: "one" });
+  assert.equal(installs().length, 3);
+  // Same lockfiles: all three node_modules are clones of build 1's, the post-install steps still run.
+  const reused = prepare(2, { LOCKFILE: "one" });
+  assert.equal(installs().length, 3, reused.stderr);
+  assert.equal((reused.stderr.match(/node_modules: cloned from/g) ?? []).length, 3);
+  dirs(2).forEach((dir, i) => assert.equal(readFileSync(join(dir, "node_modules/installed-in"), "utf8").trim(), dirs(1)[i]));
+  assert.match(h.log("npm.log"), new RegExp(`run ${build("pi-web", pwRev(2))}`));
+  // A changed lockfile, or a failed clone, installs.
+  prepare(3, { LOCKFILE: "two" });
+  assert.equal(installs().length, 6);
+  prepare(4, { LOCKFILE: "one", FAIL_CP: "1" });
+  assert.equal(installs().length, 9);
+  for (const dir of dirs(4)) assert.equal(readFileSync(join(dir, "node_modules/installed-in"), "utf8").trim(), dir);
 });
 
 test("prune keeps its live and rollback builds", () => {
@@ -212,7 +347,7 @@ test("a Durable switch refuses a PI WEB build whose daemon would not run hosts a
   const h = harness();
   assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
   const before = instanceState(h), launches = h.log("launchctl.log");
-  const refused = h.run(["switch", wbRev(2), pwRev(2), "0"], { NO_LAUNCHD: "1" });
+  const refused = h.sw(wbRev(2), pwRev(2), { NO_LAUNCHD: "1" });
   assert.equal(refused.status, 7, refused.stderr);
   assert.match(refused.stderr, /PI_WEB_DURABLE_HOST_LAUNCHD/);
   assert.equal(readdirSync(join(h.store, "jobs")).length, 1);
@@ -230,14 +365,14 @@ test("a Durable switch refuses while a running host speaks a protocol the new da
   const before = instanceState(h), launches = h.log("launchctl.log");
 
   // A protocol 3 daemon reattaches none of them; a host that no longer runs does not count.
-  const bumped = h.run(["switch", wbRev(2), pwRev(2), "0"], { PROTOCOL: "3" });
+  const bumped = h.sw(wbRev(2), pwRev(2), { PROTOCOL: "3" });
   assert.equal(bumped.status, 7, bumped.stderr);
   assert.match(bumped.stderr, /refusing: .*protocol 3/);
   assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-current: protocol 2, revision /);
   assert.match(bumped.stderr, /com\.pi-workbench\.durable-host\.fam-old: protocol 1, revision .*pi-workbench-ffffffffffff/);
   assert.doesNotMatch(bumped.stderr, /fam-gone/);
   // A protocol 2 daemon still cannot reattach the protocol 1 family.
-  const same = h.run(["switch", wbRev(3), pwRev(3), "0"]);
+  const same = h.sw(wbRev(3), pwRev(3));
   assert.equal(same.status, 7, same.stderr);
   assert.match(same.stderr, /fam-old/);
   assert.doesNotMatch(same.stderr, /fam-current|fam-gone/);
@@ -247,7 +382,7 @@ test("a Durable switch refuses while a running host speaks a protocol the new da
 
   // Without the old family it schedules; a host started during the delay is checked again when the job starts.
   hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }]);
-  const scheduled = h.run(["switch", wbRev(3), pwRev(3), "0"]);
+  const scheduled = h.sw(wbRev(3), pwRev(3));
   assert.equal(scheduled.status, 0, scheduled.stderr);
   hosts(h, [{ id: "fam-current", revision: wb1, protocol: 2, pid: process.pid }, { id: "fam-late", revision: old, protocol: 1, pid: process.pid }]);
   const late = instanceState(h);
@@ -376,7 +511,7 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
   const plist = (s) => JSON.parse(spawnSync("plutil", ["-convert", "json", "-o", "-", join(la, `com.pi-workbench.durable-trial.${s}.plist`)], { encoding: "utf8" }).stdout);
   // Like switchDurable, against the trial's store.
   const promote = (n, extra = {}) => {
-    const scheduled = h.run(["switch", wbRev(n), pwRev(n), "0"], { ...t, ...extra });
+    const scheduled = h.sw(wbRev(n), pwRev(n), { ...t, ...extra });
     assert.equal(scheduled.status, 0, scheduled.stderr);
     const job = join(store, "jobs", readdirSync(join(store, "jobs")).sort().at(-1));
     // launchd starts the job without the caller's environment: only the shims' switches.
@@ -401,9 +536,14 @@ test("a trial (PI_PROMOTE_DURABLE_TRIAL) promotes and rolls back only its own fo
       PI_WEB_PI_PACKAGE_DIR: `${build("pi-web", pwRev(2))}/node_modules/@earendil-works/pi-coding-agent`,
       PI_WEB_DURABLE_HOST: `${build("pi-workbench", wbRev(2))}/packages/durable-pilot/src/chat-host-main.ts`, PI_WEB_DURABLE_DEFAULT: "1",
       PI_WEB_DURABLE_HOST_LAUNCHD: "com.pi-workbench.durable-trial.host", PI_WEB_DURABLE_AUTO_UPGRADE: "1", PI_WEB_DURABLE_AGENT_DIR: "/trial/agent", PI_OFFLINE: "1",
+      PI_PROMOTE_DURABLE_TRIAL: trial, PI_PROMOTE_DURABLE_PORT: "8516", PI_WORKBENCH_PROJECTS: projects,
     });
   }
-  assert.equal(readlinkSync(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
+  // PI WEB's Install latest runs the script with the web service's environment: it must act on the trial, not the real store.
+  const fromWeb = spawnSync("bash", [script, "current"], { env: { ...h.env, ...plist("web").EnvironmentVariables }, encoding: "utf8" });
+  assert.equal(fromWeb.stdout.trim(), `${short(wbRev(2))} ${short(pwRev(2))}`, fromWeb.stderr);
+  assert.notEqual(h.run(["current"]).stdout.trim(), fromWeb.stdout.trim());
+  assert.equal(resolve(join(projects, "pi-workbench.durable-installed")), build("pi-workbench", wbRev(2)));
   assert.equal(readlinkSync(join(data, "plugins/pi-workbench")), join(projects, "pi-workbench.durable-installed/packages"));
 
   // A forced failed health check restores the trial's previous services.
@@ -452,4 +592,152 @@ test("the removed legacy commands and --instance are refused", () => {
     assert.equal(r.status, 2, args.join(" "));
     assert.match(r.stderr, /promote-installed supports/);
   }
+});
+
+test("release layout: an old two-link install migrates on the next switch without changing what runs; again is a no-op", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  assert.equal(h.run(["prepare", wbRev(1), pwRev(1)]).status, 0);
+  for (const [p, rev] of [["pi-workbench", wbRev(1)], ["pi-web", pwRev(1)]]) symlinkSync(build(p, rev), join(h.projects, `${p}.durable-installed`));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(1))}\n`);
+
+  const scheduled = h.sw(wbRev(2), pwRev(2));
+  assert.equal(scheduled.status, 0, scheduled.stderr);
+  assert.match(scheduled.stderr, /migrating the \*\.durable-installed links/);
+  // Scheduled, not yet run: the same builds, now through current.
+  assert.equal(readlinkSync(join(h.store, "current")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
+  for (const [p, rev] of [["pi-workbench", wbRev(1)], ["pi-web", pwRev(1)]]) {
+    assert.equal(readlinkSync(join(h.projects, `${p}.durable-installed`)), join(h.store, "current", p));
+    assert.equal(resolve(join(h.projects, `${p}.durable-installed`)), build(p, rev));
+  }
+  const jobs = join(h.store, "jobs"), job = join(jobs, readdirSync(jobs).sort().at(-1));
+  assert.equal(spawnSync("bash", [join(job, "job.sh")], { env: h.env }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
+  assert.equal(readlinkSync(join(h.store, "previous")), `releases/${short(wbRev(1))}-${short(pwRev(1))}`);
+
+  const again = h.switchDurable(wbRev(3), pwRev(3));
+  assert.equal(again.status, 0, again.log);
+  assert.doesNotMatch(again.scheduled.stderr, /migrating/);
+});
+
+test("SIGKILL after both bootouts: replay the same switch with original backups, even if replay must roll back", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const cmd = ["switch", wbRev(2), pwRev(2), "--from", wbRev(1), pwRev(1), "0"];
+  for (const fail of [true, false]) {
+    assert.equal(h.run(cmd).status, 0);
+    const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+    const execute = extra => spawnSync("bash", [join(job, "job.sh")], { env: { ...h.env, ...extra } });
+    assert.equal(execute({ CRASH_STOP: "1" }).signal, "SIGKILL");
+    assert.match(readlinkSync(join(h.store, "current")), /aaa2-bbbbbbbbbbb2$/);
+    assert.equal(h.run(["current", "--settled"]).status, 10);
+    assert.equal(h.run(["prune", "--apply"]).status, 6);
+    assert.notEqual(h.sw(wbRev(3), pwRev(3)).status, 0);
+    const resumed = h.run(cmd);
+    assert.equal(resumed.status, 0, resumed.stderr);
+    assert.match(resumed.stdout, /resuming interrupted switch/);
+    const r = execute(fail ? { BAD: short(pwRev(2)) } : {});
+    assert.equal(r.status, fail ? 1 : 0, readFileSync(join(job, "job.log"), "utf8"));
+    const n = fail ? 1 : 2;
+    assert.equal(h.run(["current", "--settled"]).stdout, `${short(wbRev(n))} ${short(pwRev(n))}\n`);
+    for (const s of ["web", "sessiond"]) assert.ok(h.plist(s).ProgramArguments[3].includes(short(pwRev(n))));
+  }
+});
+
+test("a rerun of an interrupted switch applies its own --force; no child inherits the writer lock", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const cmd = ["switch", wbRev(2), pwRev(2), "--from", wbRev(1), pwRev(1), "0"];
+  assert.equal(h.run(cmd).status, 0);
+  const job = join(h.store, "jobs", readdirSync(join(h.store, "jobs")).sort().at(-1));
+  const busy = join(h.root, "ps-busy.txt");
+  writeFileSync(busy, `200 1 node ${h.store}/pi-web-${short(pwRev(1))}/dist/server/sessiond.js\n220 200 pi --mode rpc\n`);
+  const execute = (extra) => spawnSync("bash", [join(job, "job.sh")], { env: { ...h.env, ...extra } });
+  assert.equal(execute({ CRASH_STOP: "1" }).signal, "SIGKILL");
+  // Old services' subagents still run: a plain rerun refuses, a forced rerun goes ahead.
+  assert.equal(h.run(cmd).status, 0);
+  assert.equal(execute({ PI_PROMOTE_PS: `cat ${busy}` }).status, 3);
+  const forced = h.run(["--force", ...cmd]);
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.equal(execute({ PI_PROMOTE_PS: `cat ${busy}` }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
+  assert.equal(h.log("fd9.log"), "");
+});
+
+test("an interrupted web-only restart resumes without restarting the session daemon", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const before = h.log("launchctl.log"), cmd = ["switch-web", pwRev(2), "--from", wbRev(1), pwRev(1)];
+  assert.equal(h.run(cmd, { CRASH_WEB: "1" }).signal, "SIGKILL");
+  const status = h.run(["current", "--settled"]);
+  assert.equal(status.status, 10);
+  assert.match(status.stdout, /switch-web\n$/);
+  assert.equal(h.run(["prune", "--apply"]).status, 6);
+  assert.equal(h.run(cmd).status, 0);
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(1))} ${short(pwRev(2))}\n`);
+  assert.doesNotMatch(h.log("launchctl.log").slice(before.length), /sessiond/);
+});
+
+test("first install can resume with one dangling public link; reselecting a release never rewrites it", () => {
+  const h = harness();
+  symlinkSync(join(h.store, "current/pi-workbench"), join(h.projects, "pi-workbench.durable-installed"));
+  assert.equal(h.run(["current"]).stdout, "none none\n");
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const dir = realpathSync(join(h.store, "current"));
+  const times = () => [dir, ...["pi-workbench", "pi-web"].map(p => join(dir, p))].map(p => lstatSync(p).ctimeMs);
+  const before = times();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  assert.deepEqual(times(), before);
+});
+
+test("release layout: a failed swap of current or a failed health check leaves the old pair whole, previous restored", () => {
+  const h = harness();
+  const pair = () => h.run(["current"]).stdout.trim();
+  for (const n of [1, 2]) assert.equal(h.switchDurable(wbRev(n), pwRev(n)).status, 0);
+  const before = { current: readlinkSync(join(h.store, "current")), previous: readlinkSync(join(h.store, "previous")), pair: pair() };
+  assert.equal(before.pair, `${short(wbRev(2))} ${short(pwRev(2))}`);
+  const after = () => ({ current: readlinkSync(join(h.store, "current")), previous: readlinkSync(join(h.store, "previous")), pair: pair() });
+
+  // The rename of current fails after previous moved: the job rolls back, both products stay on pair 2.
+  const failedSwap = h.switchDurable(wbRev(3), pwRev(3), { FAIL_MV_CURRENT: "1" });
+  assert.equal(failedSwap.status, 1, failedSwap.log);
+  assert.match(failedSwap.log, /rollback done/);
+  assert.deepEqual(after(), before);
+  // The swap succeeded but PI WEB stays unhealthy: rollback swaps current back in one rename.
+  const unhealthy = h.switchDurable(wbRev(3), pwRev(3), { BAD: short(pwRev(3)) });
+  assert.equal(unhealthy.status, 1, unhealthy.log);
+  assert.deepEqual(after(), before);
+  // switch-workbench whose rename fails changes nothing either.
+  const wb = h.partial("switch-workbench", wbRev(4), { FAIL_MV_CURRENT: "1" });
+  assert.equal(wb.status, 1);
+  assert.equal(pair(), before.pair);
+  const ok = h.partial("switch-workbench", wbRev(4));
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(pair(), `${short(wbRev(4))} ${short(pwRev(2))}`);
+  assert.equal(readlinkSync(join(h.store, "previous")), before.current);
+});
+
+test("prune never removes a build named by the current or previous release, and drops other release folders", () => {
+  const h = harness();
+  const build = (product, rev) => join(h.store, `${product}-${short(rev)}`);
+  for (const n of [1, 2]) assert.equal(h.switchDurable(wbRev(n), pwRev(n)).status, 0);
+  assert.equal(h.run(["prepare", wbRev(3), pwRev(3)]).status, 0);
+  assert.equal(h.run(["prepare", wbRev(4), pwRev(4)]).status, 0);
+  // Every retired marker older than any running Pi; build 3 is the newest retired, so the rollback guess picks it, not 1.
+  for (const [n, hours] of [[1, 3], [3, 1]]) for (const product of ["pi-workbench", "pi-web"]) {
+    const marker = `${build(product, product === "pi-web" ? pwRev(n) : wbRev(n))}.retired`, when = new Date(Date.now() - hours * 3600e3);
+    writeFileSync(marker, ""); utimesSync(marker, when, when);
+  }
+  mkdirSync(join(h.store, "releases", "000000000000-111111111111"));
+  const dry = h.run(["prune"]);
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.match(dry.stdout, /keep   pi-workbench-aaaaaaaaaaa1: rollback \(in the current or previous release\)/);
+  assert.match(dry.stdout, /remove release 000000000000-111111111111/);
+  assert.equal(h.run(["prune", "--apply"]).status, 0);
+  for (const product of ["pi-workbench", "pi-web"]) {
+    const rev = product === "pi-web" ? pwRev : wbRev;
+    for (const n of [1, 2, 3]) assert.ok(existsSync(build(product, rev(n))), `${product} ${n}`);
+    assert.ok(!existsSync(build(product, rev(4))), `${product} 4`);
+  }
+  assert.deepEqual(readdirSync(join(h.store, "releases")).sort(), [`${short(wbRev(1))}-${short(pwRev(1))}`, `${short(wbRev(2))}-${short(pwRev(2))}`]);
 });

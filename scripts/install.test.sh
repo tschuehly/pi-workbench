@@ -22,15 +22,19 @@ mkdir -p "$t/projects/pi-workbench/scripts"; cp "$src" "$t/projects/pi-workbench
 export PI_WEB_REPO=$t/pw.git
 I=$t/projects/pi-workbench/scripts/install
 
-# Stub promote-installed: records its arguments and environment, links the builds, writes the job log (RESULT picks the outcome).
+# Stub promote-installed: records its arguments and environment, keeps the installed pair in $HOME/pair (no links, so
+# install must ask `current`), writes the job log (RESULT picks the outcome).
 cat >"$t/promote" <<'EOF'
 #!/usr/bin/env bash
+if [[ $1 == current ]]; then
+  [[ -z ${BEFORE_CLONE:-} || ! -d $PI_WORKBENCH_PROJECTS/pi-web ]] || exit 1
+  if [[ -n ${INTERRUPTED:-} && $2 == --settled ]]; then echo "$INTERRUPTED"; exit 10; fi
+  cat "$HOME/pair" 2>/dev/null || echo "none none"; exit 0; fi
 echo "promote $* env=${PI_PROMOTE_DURABLE_ENV:-}" >>"$HOME/calls"
 [[ $1 == --force ]] && shift
 s=$HOME/.pi-workbench/installed-durable; mkdir -p "$s/jobs/j"
 if [[ ${RESULT:-promoted} == promoted ]]; then
-  ln -sfn "$s/pi-workbench-${2:0:12}" "$PI_WORKBENCH_PROJECTS/pi-workbench.durable-installed"
-  ln -sfn "$s/pi-web-${3:0:12}" "$PI_WORKBENCH_PROJECTS/pi-web.durable-installed"
+  echo "${2:0:12} ${3:0:12}" >"$HOME/pair"
 fi
 echo "${RESULT:-promoted} 2026-11-24T00:00:00Z" >"$s/jobs/j/job.log"
 echo "scheduled x in 0s; log: $s/jobs/j/job.log"
@@ -46,10 +50,10 @@ check "dry run: exit 0, prints the clone, nothing cloned or called" test "$code"
 grep -q "git clone --branch pi-workbench" "$t/out" && ok "dry run: names the PI WEB clone" || fail "dry run: names the PI WEB clone"
 
 wb_rev=$(git -C "$t/wb.git" rev-parse main) pw_rev=$(git -C "$t/pw.git" rev-parse pi-workbench)
-code=$(PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=/x" rc "$I")
+code=$(BEFORE_CLONE=1 PI_PROMOTE_DURABLE_ENV="GIT_CONFIG_GLOBAL=/x" rc "$I")
 check "fresh install: exit 0" test "$code" = 0
 check "fresh install: PI WEB cloned on branch pi-workbench" test "$(git -C "$t/projects/pi-web" branch --show-current)" = pi-workbench
-check "fresh install: switch to both tips, environment passed through" grep -qx "promote switch $wb_rev $pw_rev 0 env=GIT_CONFIG_GLOBAL=/x" "$HOME/calls"
+check "fresh install: switch to both tips, environment passed through" grep -qx "promote switch $wb_rev $pw_rev --from none none 0 env=GIT_CONFIG_GLOBAL=/x" "$HOME/calls"
 check "fresh install: app built --app-only against :8506 from the installed PI WEB" \
   grep -qx "app --app-only dir=$t/projects/pi-web.durable-installed url=http://127.0.0.1:8506" "$HOME/calls"
 
@@ -60,11 +64,23 @@ grep -q "already installed" "$t/out" && ok "rerun: says already installed" || fa
 code=$(rc "$I" --dry-run --no-app)
 check "dry run at the same tips: plans no switch" bash -c "test $code = 0 && grep -q 'already installed' '$t/out' && ! grep -q 'promote' '$t/out'"
 
+code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev switch" rc "$I" --no-app)
+check "interrupted same-pair install resumes instead of skipping" bash -c "test $code = 0 && grep -q '^promote switch $wb_rev $pw_rev --from ' '$HOME/calls'"
+
+code=$(INTERRUPTED="${wb_rev:0:12} ${pw_rev:0:12} $wb_rev $pw_rev switch-web" rc "$I" --dry-run --no-app)
+check "web-only recovery does not request a daemon restart" bash -c "test $code = 0 && grep -q 'switch-web $pw_rev --from' '$t/out'"
+
 echo two >>"$t/seed-pw/f"; git -C "$t/seed-pw" commit -qam two; git -C "$t/seed-pw" push -q origin HEAD:refs/heads/pi-workbench
 new_pw=$(git -C "$t/pw.git" rev-parse pi-workbench)
 code=$(RESULT="rollback done" rc "$I" --no-app --force)
-check "new PI WEB tip with a failed job: exit 1, --force passed on" bash -c "test $code = 1 && grep -qx 'promote --force switch $wb_rev $new_pw 0 env=' '$HOME/calls'"
+check "new PI WEB tip with a failed job: exit 1, --force passed on" bash -c "test $code = 1 && grep -qx 'promote --force switch $wb_rev $new_pw --from ${wb_rev:0:12} ${pw_rev:0:12} 0 env=' '$HOME/calls'"
 check "failed job: the checkouts stayed where they were" test "$(git -C "$t/projects/pi-web" rev-parse HEAD)" = "$pw_rev"
+
+# A pi-web.rev on main pins PI WEB to that commit, not the pi-workbench branch tip.
+printf '%s\n' "$pw_rev" >"$t/seed-wb/pi-web.rev"; git -C "$t/seed-wb" add pi-web.rev; git -C "$t/seed-wb" commit -qm pin; git -C "$t/seed-wb" push -q origin HEAD:refs/heads/main
+pin_wb=$(git -C "$t/wb.git" rev-parse main); : >"$HOME/calls"
+code=$(rc "$I" --no-app)
+check "pinned: switches to pi-web.rev, not the PI WEB tip" bash -c "test $code = 0 && grep -q '^promote switch $pin_wb $pw_rev --from ' '$HOME/calls'"
 
 mkdir -p "$t/other/scripts"; cp "$src" "$t/other/scripts/install"
 code=$(rc "$t/other/scripts/install" --no-app)

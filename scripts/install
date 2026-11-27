@@ -2,8 +2,9 @@
 # Install (or update) Pi Workbench and PI WEB on this Mac from the tips of their integration branches, as the Durable
 # instance (docs/contracts/harness.md, "Installed and Development Checkouts"). Run it from the pi-workbench checkout:
 #   1. clone PI WEB beside it if missing (branch pi-workbench of $PI_WEB_REPO), then fetch both repos (no checkout moves);
-#   2. scripts/promote-installed switch <pi-workbench origin/main> <pi-web origin/pi-workbench> and wait for its job;
-#      skipped when both *.durable-installed links already point at those builds, so a rerun interrupts no session;
+#   2. scripts/promote-installed switch <pi-workbench origin/main> <its pi-web.rev> --from <the installed pair>
+#      and wait for its job (origin/pi-workbench of PI WEB when that main has no pi-web.rev);
+#      skipped when `promote-installed current` already prints that pair, so a rerun interrupts no session;
 #   3. build the native app (apps/pi-web-macos, --app-only: no services) for the Durable instance on :8506.
 # PI_PROMOTE_DURABLE_ENV passes through to the services, e.g. "GIT_CONFIG_GLOBAL=$HOME/.config/git/agent.gitconfig".
 # A switch restarts PI WEB and interrupts its open sessions; promote-installed refuses while subagents run.
@@ -22,7 +23,6 @@ done
 here=$(cd "$(dirname "$0")/.." && pwd -P)
 projects=${PI_WORKBENCH_PROJECTS:-$HOME/IdeaProjects}
 wb=$projects/pi-workbench pw=$projects/pi-web
-store=$HOME/.pi-workbench/installed-durable
 promote=${PI_INSTALL_PROMOTE:-$here/scripts/promote-installed}
 app_script=${PI_INSTALL_APP_SCRIPT:-$projects/pi-workbench.durable-installed/apps/pi-web-macos/Scripts/install-app.sh}
 repo=${PI_WEB_REPO:-https://github.com/tschuehly/pi-web.git}
@@ -31,26 +31,38 @@ say() { printf '%s\n' "$*"; }
 run() { if [[ $dry == 1 ]]; then printf '+'; printf ' %q' "$@"; printf '\n'; else "$@"; fi; }
 
 [[ $(cd "$wb" 2>/dev/null && pwd -P) == "$here" ]] || { echo "install: run it from $wb (this is $here)" >&2; exit 1; }
-if [[ ! -d $pw/.git ]]; then
-  [[ ! -e $pw ]] || { echo "install: $pw exists but is not a git checkout" >&2; exit 1; }
-  run git clone --branch pi-workbench "$repo" "$pw"
-fi
-if [[ $dry == 0 ]]; then
-  git -C "$wb" fetch --quiet origin && git -C "$pw" fetch --quiet origin || { echo "install: fetch failed" >&2; exit 1; }
-fi
-tip() { git -C "$1" rev-parse --verify --quiet "$2^{commit}" 2>/dev/null; }
-wb_rev=$(tip "$wb" origin/main) || { echo "install: no origin/main in $wb" >&2; exit 1; }
-if [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "install: no origin/pi-workbench in $pw" >&2; exit 1; }
-else pw_rev="origin/pi-workbench (after the clone)"; fi
+# Running install is the owner's approval, so the pair installed right now is the one the switch replaces.
+status=0; installed=$("$promote" current --settled) || status=$?
+if [[ $status == 10 ]]; then
+  read -r from_wb from_pw wb_rev pw_rev mode <<<"$installed"
+  say "finishing the interrupted promotion before selecting a newer pair"
+elif [[ $status == 0 ]]; then
+  read -r from_wb from_pw <<<"$installed"
+  if [[ ! -d $pw/.git ]]; then
+    [[ ! -e $pw ]] || { echo "install: $pw exists but is not a git checkout" >&2; exit 1; }
+    run git clone --branch pi-workbench "$repo" "$pw"
+  fi
+  if [[ $dry == 0 ]]; then
+    git -C "$wb" fetch --quiet origin && git -C "$pw" fetch --quiet origin || { echo "install: fetch failed" >&2; exit 1; }
+  fi
+  tip() { git -C "$1" rev-parse --verify --quiet "$2^{commit}" 2>/dev/null; }
+  wb_rev=$(tip "$wb" origin/main) || { echo "install: no origin/main in $wb" >&2; exit 1; }
+  # The PI WEB commit pinned by that pi-workbench commit (docs/contracts/harness.md, "Pinned pair").
+  if pin=$(git -C "$wb" show "$wb_rev:pi-web.rev" 2>/dev/null); then
+    pw_rev=$(tr -d '[:space:]' <<<"$pin"); [[ $pw_rev =~ ^[0-9a-f]{40}$ ]] || { echo "install: pi-web.rev at $wb_rev is not a full commit" >&2; exit 1; }
+  elif [[ -d $pw/.git ]]; then pw_rev=$(tip "$pw" origin/pi-workbench) || { echo "install: no origin/pi-workbench in $pw" >&2; exit 1; }
+  else pw_rev="origin/pi-workbench (after the clone)"; fi
+else echo "install: cannot read the installed pair" >&2; exit 1; fi
 say "pi-workbench: $wb_rev"; say "pi-web:       $pw_rev"
 
-current() { [[ $(readlink "$projects/$1.durable-installed" 2>/dev/null) == "$store/$1-${2:0:12}" ]]; }
-if current pi-workbench "$wb_rev" && current pi-web "$pw_rev"; then
-  say "already installed: both *.durable-installed links point at these builds; no switch"
+if [[ $status == 0 && $from_wb == "${wb_rev:0:12}" && $from_pw == "${pw_rev:0:12}" ]]; then
+  say "already installed: this pair is the installed one; no switch"
+elif [[ ${mode:-} == switch-web ]]; then
+  run "$promote" switch-web "$pw_rev" --from "$from_wb" "$from_pw"
 elif [[ $dry == 1 ]]; then
-  run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" 0
+  run "$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0
 else
-  out=$("$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" 0) || { printf '%s\n' "$out" >&2; exit 1; }
+  out=$("$promote" ${force[@]+"${force[@]}"} switch "$wb_rev" "$pw_rev" --from "$from_wb" "$from_pw" 0) || { printf '%s\n' "$out" >&2; exit 1; }
   printf '%s\n' "$out"
   log=$(sed -n 's/.*; log: //p' <<<"$out" | tail -1)
   [[ -n $log ]] || { echo "install: promote-installed printed no job log" >&2; exit 1; }
