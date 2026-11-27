@@ -20,6 +20,9 @@ const AGENT_CACHES = ".pi-workbench/sandbox-caches";
 // fence grants. One folder for every fenced job (they all lock the shared agent store), outside the agent caches so no
 // fenced command can replace it or change its mode: only its contents are granted.
 const RUNTIME = ".pi-workbench/sandbox-runtime";
+// gcloud's login and dev-run's VM state, granted as they are (made by the tools themselves when missing): Thomas
+// accepted that agents can then act as him in GCP (27 Nov).
+const CLOUD = [".config/gcloud", ".local/state/embabel-dev-vm"];
 // shortcut: a job can plant a file where pnpm's lock folder goes and break later fenced installs, like it can break
 // the shared agent store itself; delete the entry to recover. Upgrade to per-job store and runtime if this happens.
 
@@ -138,7 +141,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
-  write.push(join(home, AGENT_CACHES), join(home, RUNTIME));
+  write.push(join(home, AGENT_CACHES), join(home, RUNTIME), ...CLOUD.map((p) => join(home, p)));
   locked.push(join(home, RUNTIME));
   return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
 }

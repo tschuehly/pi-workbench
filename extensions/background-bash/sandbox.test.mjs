@@ -9,7 +9,7 @@ import { after, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, mayWrite, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -127,7 +127,7 @@ test("inside a fence the runner starts commands under the outer fence instead of
 
 test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a scratch folder counts once", () => {
   const h = "/Users/someone";
-  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches") && !p.endsWith("sandbox-runtime"));
+  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches") && !p.endsWith("sandbox-runtime") && !p.endsWith("gcloud") && !p.endsWith("embabel-dev-vm"));
   assert.deepEqual(rules(h), []);
   assert.deepEqual(rules(`${h}/IdeaProjects`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch`), []);
@@ -140,6 +140,18 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(all.write.includes(`${h}/.pi-workbench/sandbox-caches`));
   assert.ok(grants({ cwd: h, home: h }).hidden.includes(`${h}/Desktop`));
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
+});
+
+test("grants: gcloud's login and dev-run's state are writable, even before they exist; ~/.ssh stays read-only", () => {
+  const fake = realpathSync(mkdtempSync(join(root, "cloud-home-")));
+  for (const dir of [".config/gcloud", ".local/state", ".ssh"]) mkdirSync(join(fake, dir), { recursive: true });
+  const rules = grants({ cwd: fake, home: fake });
+  for (const dir of [".config/gcloud", ".local/state/embabel-dev-vm"]) {
+    assert.ok(rules.write.includes(join(fake, dir)), dir);
+    assert.ok(mayWrite(join(fake, dir, "credentials.db"), rules), dir);
+    assert.ok(!rules.hidden.some((h) => join(fake, dir).startsWith(h)) && ![...rules.read, ...rules.locked].some((r) => join(fake, dir).startsWith(r)), `${dir} is not denied`);
+  }
+  for (const path of [".ssh/id_ed25519", ".config/other", ".local/state/x"]) assert.ok(!mayWrite(join(fake, path), rules), path);
 });
 
 test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute, --clobber or `wt remove`", () => {

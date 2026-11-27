@@ -66,7 +66,7 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
   owner and creator records and `.git` link stay read-only), linked worktrees whose creation receipt
   (`pi-creator.json`) names the chat (or, for a chat started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
-  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
+  is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), the agents' own caches, and `~/.config/gcloud` and `~/.local/state/embabel-dev-vm` (gcloud's login and dev-run's state: agents can act as Thomas in GCP, which he accepted on 27 Nov). Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
   folders (unfenced Pi loads compiled extensions from there) or Thomas's caches (`~/Library/Caches`, `~/.cache`,
   `~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`): unfenced tools load code from them, e.g. Python's `.pyc` files.
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
