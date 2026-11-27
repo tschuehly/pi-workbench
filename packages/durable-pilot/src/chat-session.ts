@@ -465,7 +465,8 @@ export class ChatSession {
 			this.#chat.workbench.onSignal = (signal) => void this.#signal(signal);
 			this.#chat.spawner?.attach((event) => this.#emit(event));
 			this.#chat.messenger?.attach((event) => this.#emit(event));
-			await this.#host.harness.commit((tx) => this.#syncSpawnTool(tx), context);
+			// No tool sync here: before configure() both look disabled, so a restart would drop spawn_session and
+			// send_chat_message and configure() re-append them, reordering the tools and losing the prompt cache.
 			this.#chat.workbench.record = (type, data) => {
 				this.#record(type, data);
 				// A child is its own telemetry session, as a legacy child Pi process is: its start names the lead as its parent,

@@ -283,6 +283,30 @@ test("chatMessage: request IDs are per sender; a repeat returns the first delive
 	await host.close();
 });
 
+test("a restart keeps the enabled tools until PI WEB's settings arrive, so the prompt cache survives it", async () => {
+	const { store, cwd } = family("chat-message-tool-order");
+	const first = new ChatHost(store, cwd);
+	await first.ready;
+	await first.call("configure", { resources: {}, chatMessages: true, spawnSessions: true });
+	await first.call("prompt", { operationId: "op-0", text: "before" });
+	await first.idle(1);
+	const before = logged(store).at(-1)!.tools!;
+	assert.ok(before.includes("send_chat_message") && before.includes("spawn_session"));
+	await first.close();
+	// A turn before configure() (a resumed answer, a queued message): dropping the tools here, then re-adding them,
+	// appends them out of order, and Durable redeclares every tool.
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "early" });
+	await host.idle(1);
+	assert.deepEqual(logged(store).at(-1)!.tools, before);
+	await host.call("configure", { resources: {}, chatMessages: true, spawnSessions: true });
+	await host.call("prompt", { operationId: "op-2", text: "after" });
+	await host.idle(2);
+	assert.deepEqual(logged(store).at(-1)!.tools, before);
+	await host.close();
+});
+
 test("chatMessage: a paused restore refuses at once, wake and note alike, and records nothing", async () => {
 	const { store, cwd } = family("chat-message-paused");
 	const first = new ChatHost(store, cwd);
