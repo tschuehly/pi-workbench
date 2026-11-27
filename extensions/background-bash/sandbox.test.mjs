@@ -30,12 +30,12 @@ if (!skip) {
 }
 
 let n = 0;
-async function run(command, { cwd = repo, owned = false, env = {} } = {}) {
+async function run(command, { cwd = repo, owned = false, env = {}, folder } = {}) {
   const id = `sandbox-${process.pid}-${n++}`;
   const jobs = join(root, "jobs");
   // Every command below resolves $HOME to the fake home; refuse to run anything if that ever fails.
   assert.ok(home.startsWith(root));
-  launchJob({ root: jobs, id, command, description: "Fence test", cwd, timeout: 30, env: { ...process.env, HOME: home, PI_TMP: piTmp, GIT_CONFIG_GLOBAL: "/dev/null", ...env }, sessionId: "sandbox-test", startedAt: Date.now(), owned, cleanupGraceMs: 200 });
+  launchJob({ root: jobs, id, command, description: "Fence test", cwd, timeout: 30, env: { ...process.env, HOME: home, PI_TMP: piTmp, GIT_CONFIG_GLOBAL: "/dev/null", ...env }, sessionId: "sandbox-test", startedAt: Date.now(), owned, cleanupGraceMs: 200, ...(folder === undefined ? {} : { folder }) });
   for (const deadline = Date.now() + 25_000; ;) {
     const job = readJob(jobs, id);
     if (job.state !== "running" && job.state !== "pending") return job;
@@ -675,4 +675,54 @@ test("Workstream grants: a fenced command commits in a granted checkout and cann
   assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["COMMITTED"]);
   assert.match(git(lib, "log", "-1", "--format=%s"), /fenced/);
   revoke(home, "ws-g", lib);
+});
+
+// Runs inside a fence too: it only computes the grants on a fake home.
+test("folder fixed at Chat open: a Chat folder a job swapped for a link to another checkout or Workstream folder grants nothing there", async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "folder-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  const other = join(fake, "IdeaProjects", "other");
+  for (const dir of [join(app, "sub"), other]) mkdirSync(dir, { recursive: true });
+  for (const dir of [app, other]) execFileSync("git", ["init", "-q", dir]);
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  const cwd = join(app, "sub");
+  const folder = realpathSync(cwd);
+  const blocked = async (path, at = { cwd, folder }) => /^Blocked/.test(await writeRefusal(path, { ...at, sessionId: "folder-test", env }) ?? "");
+  assert.equal(await blocked(join(app, "sub", "x")), false, "its own checkout before the swap");
+  rmSync(cwd, { recursive: true });
+  symlinkSync(other, cwd);
+  assert.equal(await blocked(join(other, "x"), { cwd }), false, "unfixed, the swapped-in checkout would be granted");
+  assert.ok(await blocked(join(other, "x")), "fixed at open: the swapped-in checkout");
+  assert.ok(await blocked(join(app, "x")), "nor its own: the folder no longer is the one it opened in");
+  // A Workstream folder swapped the same way gives neither that folder nor that Workstream's grants.
+  const mine = join(fake, ".pi-workbench", "scratch", "ws-a", "sub");
+  const theirs = join(fake, ".pi-workbench", "scratch", "ws-b");
+  for (const dir of [mine, theirs]) mkdirSync(dir, { recursive: true });
+  const opened = realpathSync(mine);
+  grant(fake, "ws-b", other);
+  rmSync(mine, { recursive: true });
+  symlinkSync(theirs, mine);
+  assert.equal(await blocked(join(other, "x"), { cwd: mine }), false, "unfixed, ws-b's grant would apply");
+  for (const path of [join(other, "x"), join(theirs, "x")]) assert.ok(await blocked(path, { cwd: mine, folder: opened }), path);
+  // Inside the folder it opened in still counts.
+  mkdirSync(join(app, "deeper"));
+  assert.equal(await blocked(join(app, "deeper", "x"), { cwd: join(app, "deeper"), folder: realpathSync(app) }), false);
+});
+
+test("folder fixed at Chat open: a fenced command whose folder was swapped for a link cannot commit in the linked checkout", { skip }, async () => {
+  const other = join(home, "IdeaProjects", "swapped-in");
+  mkdirSync(other);
+  git(other, "init", "-q");
+  git(other, "commit", "-q", "--allow-empty", "-m", "init");
+  const sub = join(repo, "chat-folder");
+  mkdirSync(sub);
+  const folder = realpathSync(sub);
+  rmSync(sub, { recursive: true });
+  symlinkSync(other, sub);
+  const job = await run(`${commit} && echo COMMITTED; true`, { cwd: sub, folder });
+  assert.equal(job.state, "complete", job.error);
+  assert.doesNotMatch(readFileSync(job.logPath, "utf8"), /COMMITTED/);
+  assert.equal(JSON.parse(readFileSync(join(root, "jobs", job.id, "job.json"), "utf8")).folder, folder, "the job record carries the folder");
+  assert.doesNotMatch(git(other, "log", "-1", "--format=%s"), /fenced/);
+  rmSync(sub);
 });

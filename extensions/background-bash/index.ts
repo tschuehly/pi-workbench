@@ -1,5 +1,6 @@
 import { createBashToolDefinition, getAgentDir, getShellConfig, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { delimiter, join } from "node:path";
+import { realpathSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 import { Type } from "typebox";
 import { registerMonitorPolicy } from "./monitor-policy.mjs";
 import { createBackgroundBashJobs } from "./jobs.mjs";
@@ -19,7 +20,12 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
   let publishStatus: () => void = () => {};
   let clearStatus: () => void = () => {};
   const jobs = createBackgroundBashJobs(pi, { onChange: () => { publishStatus(); } });
+  // The session's folder, resolved once at its start: a folder a job later swaps for a link grants nothing (sandbox.mjs).
+  let folder: { cwd: string; real: string } | undefined;
   pi.on("session_start", (_event, ctx) => {
+    let real = resolve(ctx.cwd);
+    try { real = realpathSync(ctx.cwd); } catch { /* missing: kept as spelled */ }
+    folder = { cwd: ctx.cwd, real };
     // One-shot modes run bash in the foreground; leave completions for the next attended open.
     if (ctx.mode === "print" || ctx.mode === "json") return;
     if (ctx.mode === "rpc") {
@@ -73,7 +79,7 @@ export default function backgroundBashExtension(pi: ExtensionAPI) {
       if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
       else delete env.PI_REASONING_LEVEL;
       const { shell, args } = getShellConfig();
-      const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args, description: params.description });
+      const job = jobs.start(params.command, ctx.cwd, params.timeout, env, { sessionId: ctx.sessionManager.getSessionId(), sessionFile, shell, args, description: params.description, ...(folder?.cwd === ctx.cwd ? { folder: folder.real } : {}) });
       if (params.foreground === true) {
         const done = await jobs.wait(job.id, FOREGROUND_WAIT_MS, signal);
         if (done !== undefined) {

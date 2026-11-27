@@ -152,7 +152,8 @@ export function workstreamGrants(home, ws) {
  */
 export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], granted = [] }) {
   home = real(home);
-  cwd = real(cwd);
+  // No cwd: a launch whose folder resolves elsewhere than at the Chat's open (jobGrants).
+  cwd = cwd === undefined ? undefined : real(cwd);
   const { scratchRoot, grantable } = limits(home);
   const write = [];
   const read = [];
@@ -174,8 +175,8 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], 
     if (repo.gitDir !== repo.common) locked.push(join(repo.top, ".git"));
     return true;
   };
-  const repo = git(cwd);
-  if (!(repo !== undefined && grantable(repo.top) && checkout(repo)) && inside(cwd, scratchRoot)) write.push(join(scratchRoot, relative(scratchRoot, cwd).split(sep)[0]));
+  const repo = cwd === undefined ? undefined : git(cwd);
+  if (!(repo !== undefined && grantable(repo.top) && checkout(repo)) && cwd !== undefined && inside(cwd, scratchRoot)) write.push(join(scratchRoot, relative(scratchRoot, cwd).split(sep)[0]));
   for (const tree of worktrees) {
     const owned = git(tree);
     if (owned !== undefined && owned.top === real(tree) && grantable(owned.top) && !write.includes(owned.top)) checkout(owned);
@@ -354,18 +355,23 @@ export function alreadyFenced() {
   } catch (error) { return error.code === "EPERM"; }
 }
 
-/** The grants of a job of chat `sessionId` started in `cwd` with `env` (its PI_TMP), and the owners of its worktrees. */
-async function jobGrants({ cwd: at, sessionId }, env) {
+/**
+ * The grants of a job of chat `sessionId` started in `cwd` with `env` (its PI_TMP), and the owners of its worktrees.
+ * `folder`: the Chat's folder as the host resolved it when the Chat opened; a `cwd` that now resolves outside it (a
+ * link a job swapped in) gets nothing from its folder: no checkout, scratch folder or Workstream.
+ */
+async function jobGrants({ cwd: at, sessionId, folder }, env) {
   const home = env.HOME ?? homedir();
   const ws = await workstreamOf(sessionId, home, env);
   // Worktrees by Workstream only for a chat started in that Workstream's scratch folder: any chat can associate
   // itself with any Workstream (`workstreams associate`), but not change the folder it was started in.
   const scratchRoot = join(real(home), ".pi-workbench", "scratch");
-  const cwd = real(at);
-  const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
+  const now = real(at);
+  const cwd = typeof folder !== "string" || now === folder || inside(now, folder) ? now : undefined;
+  const started = cwd !== undefined && inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
   const owners = [sessionId, started].filter((id) => typeof id === "string" && id !== "");
   // Owner grants by the same rule: the started-in Workstream, never one the Chat linked itself to.
-  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners), granted: started === undefined ? [] : workstreamGrants(home, started) });
+  const rules = grants({ cwd, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners), granted: started === undefined ? [] : workstreamGrants(home, started) });
   return { home, owners, rules };
 }
 
@@ -400,16 +406,16 @@ export function mayWrite(path, { write, read = [], reopen = [], locked = [], his
  * undefined when its commands could write it too. Every spelling a tool layer may make of it must pass: with and
  * without a leading `@` and Unicode spaces made plain, then as Durable resolves it (`~`, `file://`, relative to `cwd`).
  */
-export async function writeRefusal(path, { cwd, sessionId, env }) {
+export async function writeRefusal(path, { cwd, sessionId, env, folder }) {
   if (typeof path !== "string") return undefined;
-  const rules = await writeGrants({ cwd, sessionId, env });
+  const rules = await writeGrants({ cwd, sessionId, env, folder });
   const target = toolPaths(path, { cwd, env }).find((t) => !mayWrite(t, rules));
   if (target === undefined) return undefined;
   return `Blocked: ${target} is outside this Chat's write folders, the same write fence its commands run in (its checkout or own worktrees, its Workstream scratch folder, PI_TMP), or a protected file inside them (git hooks and config, AGENTS.md, .pi, .envrc). Only the owner can lift it, with /full-access.`;
 }
 
 /** The write folders of chat `sessionId`'s tools in `cwd`: its commands' grants, computed now. */
-const writeGrants = async ({ cwd, sessionId, env }) => (await jobGrants({ cwd, sessionId }, env)).rules;
+const writeGrants = async ({ cwd, sessionId, env, folder }) => (await jobGrants({ cwd, sessionId, folder }, env)).rules;
 
 /**
  * Every absolute path a tool layer may make of the tool argument `path`: with and without a leading `@` and Unicode
@@ -459,10 +465,10 @@ export const fencedWrite = (path, content, at) => fencedHelper(WRITE_SCRIPT, pat
  */
 export const fencedMkdir = (path, at) => fencedHelper(MKDIR_SCRIPT, path, "", at);
 
-async function fencedHelper(script, path, content, { cwd, sessionId, env, signal }) {
+async function fencedHelper(script, path, content, { cwd, sessionId, env, signal, folder }) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "nothing was written");
-  const rules = await writeGrants({ cwd, sessionId, env });
+  const rules = await writeGrants({ cwd, sessionId, env, folder });
   if (signal?.aborted) throw Object.assign(new Error("aborted"), { code: "ABORT_ERR" });
   const args = sandboxArgs({ ...rules, read: [...rules.read, ...rules.history], history: [] }, ["/bin/sh", "-c", script, "sh", dirname(path), path]);
   const { code, stderr } = await new Promise((done) => {

@@ -109,9 +109,10 @@ export const VANISHED = "The job runner ended without recording an exit status";
  * Launch a job under a caller-chosen ID (a host that persisted its launch intent first), idempotently: a job whose
  * runner already claimed it is never started again, and of two runners started for one job only the one that claims
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
- * without starting a runner (its owner ended meanwhile).
+ * without starting a runner (its owner ended meanwhile). `folder`: the Chat's real folder, resolved when it opened
+ * (sandbox.mjs `jobGrants`).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false, prepared = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false, prepared = false, folder = "" }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
@@ -121,7 +122,7 @@ export function launchJob({ root = defaultRoot(), id, command, description, cwd,
   } else mkdirSync(dir, { recursive: true, mode: 0o700 });
   closeSync(openSync(join(dir, "output.log"), prepared ? "r" : "a", 0o600));
   // An admitted deadline is immutable, even when a host dies before the runner claims it.
-  if (!prepared && !existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
+  if (!prepared && !existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}), ...(folder === "" ? {} : { folder }) }));
   // `prepare`: only the record, for a caller that commits its own reference to the job before the runner starts.
   if (prepare) return false;
   if (cancelled) {
@@ -296,7 +297,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     deliver(job);
   }
 
-  function start(command, cwd, timeout, env, { sessionId, sessionFile, shell = "/bin/bash", args = ["-c"], description } = {}) {
+  function start(command, cwd, timeout, env, { sessionId, sessionFile, shell = "/bin/bash", args = ["-c"], description, folder } = {}) {
     if (closed) throw new Error("Background bash session has ended");
     if (typeof command !== "string" || command.trim() === "") throw new Error("A non-empty bash command is required");
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0 || timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
@@ -310,7 +311,7 @@ export function createBackgroundBashJobs(pi, { root = defaultRoot(), intervalMs 
     mkdirSync(dir, { mode: 0o700 });
     closeSync(openSync(join(dir, "output.log"), "wx", 0o600));
     const startedAt = Date.now();
-    const record = { id, command, description, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000 };
+    const record = { id, command, description, cwd, sessionId, sessionFile, shell, args, timeout, startedAt, expiresAt: startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(typeof folder === "string" ? { folder } : {}) };
     writeJson(join(dir, "job.json"), record);
     const runner = spawn(nodeBin(), [runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
     runner.unref();

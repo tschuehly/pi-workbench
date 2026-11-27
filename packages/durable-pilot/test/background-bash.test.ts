@@ -6,14 +6,14 @@
 import assert from "node:assert/strict";
 import cp, { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
-import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
+import { BackgroundBash, BashJobsDoc, chatFolder } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
 
@@ -720,3 +720,29 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 	}
 });
 
+
+test("the Chat's folder is resolved once, when it first opens: its jobs carry that real path, also after its folder is swapped for a link and the host reopens", async () => {
+	const { store, cwd } = family("folder-at-open");
+	const real = realpathSync(cwd);
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: call("bash", { description: "Print folder", command: "pwd", foreground: true }) });
+	const first = await toolEnd(host);
+	await host.close();
+	const ids = () => readdirSync(JOBS).filter((name) => JSON.parse(readFileSync(join(JOBS, name, "job.json"), "utf8")).cwd === cwd);
+	assert.deepEqual(ids().map((id) => JSON.parse(readFileSync(join(JOBS, id, "job.json"), "utf8")).folder), [real], String(first.text));
+	// A job swaps the Chat's folder for a link to another checkout; the reopened host keeps the folder it opened in.
+	const elsewhere = join(ROOT, "folder-at-open", "elsewhere");
+	mkdirSync(elsewhere, { recursive: true });
+	rmSync(cwd, { recursive: true });
+	symlinkSync(elsewhere, cwd);
+	assert.equal(chatFolder(store, cwd), real);
+	const reopened = new ChatHost(store, cwd);
+	await reopened.ready;
+	await reopened.call("prompt", { operationId: "op-2", text: call("bash", { description: "Print folder again", command: "pwd", foreground: true }) });
+	await toolEnd(reopened);
+	await reopened.close();
+	assert.deepEqual(ids().map((id) => JSON.parse(readFileSync(join(JOBS, id, "job.json"), "utf8")).folder), [real, real]);
+	// A Chat that moved to another folder (the owner's choice) resolves that one.
+	assert.equal(chatFolder(store, elsewhere), realpathSync(elsewhere));
+});

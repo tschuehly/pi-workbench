@@ -11,8 +11,8 @@
 // while a restore with interrupted work stays paused until the user resumes it (owner decision 2).
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
@@ -196,9 +196,31 @@ class FencedEnv extends NodeExecutionEnv {
 	}
 }
 
+/**
+ * The Chat's folder `cwd` as a real path, resolved when the Chat first opened and kept in its store `dir` (which no
+ * fenced command can write), so a folder a job later swaps for a link grants nothing (sandbox.mjs `jobGrants`), not even
+ * after a host restart. A `cwd` missing then is kept as spelled: a link made there later grants nothing either.
+ */
+export function chatFolder(dir: string, cwd: string): string {
+	const file = join(dir, "fence-folder.json");
+	try {
+		const kept = JSON.parse(readFileSync(file, "utf8")) as { cwd?: unknown; folder?: unknown };
+		if (kept.cwd === cwd && typeof kept.folder === "string") return kept.folder;
+	} catch { /* first open, or the owner moved the Chat: resolve now */ }
+	let folder = resolve(cwd);
+	// Not .native: sandbox.mjs compares it with realpathSync's spelling.
+	try { folder = realpathSync(cwd); } catch { /* missing: kept as spelled */ }
+	// Before the store opens it: a new Chat's store folder does not exist yet.
+	mkdirSync(dir, { recursive: true, mode: 0o700 });
+	writeFileSync(file, `${JSON.stringify({ cwd, folder })}\n`, { mode: 0o600 });
+	return folder;
+}
+
 export type BackgroundBashOptions = {
 	readonly chatId: string;
 	readonly cwd: string;
+	/** The Chat's real folder from `chatFolder`; its commands and file tools get grants only from inside it. */
+	readonly folder?: string;
 	/** The lead conversation; other conversations wait for their commands as native bash does. */
 	readonly rootId: () => ConversationId | undefined;
 	readonly root?: string;
@@ -285,7 +307,7 @@ export class BackgroundBash {
 				launchJob({
 					root: this.#root, id, command: args.command, description: args.description, cwd, timeout: ref.timeout ?? args.timeout, expiresAt: ref.expiresAt ?? NaN, owned: !lead, ownerExecutionId: child?.executionId ?? "", progressLog: typeof args.progressLog === "string" ? args.progressLog : "",
 					env: { ...process.env, ...toolEnv(identity) }, sessionId: this.#options.chatId, shell, args: shellArgs, startedAt: ref.startedAt,
-					cancelled: this.#ending || (!this.#closing && c.abortSignal?.aborted === true), fullAccess: lead && this.#fullAccess,
+					cancelled: this.#ending || (!this.#closing && c.abortSignal?.aborted === true), fullAccess: lead && this.#fullAccess, folder: this.#options.folder,
 				});
 				crashPoint("bash.spawned");
 				const logPath = readJob(this.#root, id)!.logPath;
@@ -461,18 +483,17 @@ export class BackgroundBash {
 	async writeRefusal(path: unknown, cwd: string, conversationId: ConversationId): Promise<string | undefined> {
 		if (this.#unfenced(conversationId)) return undefined;
 		const env = { ...process.env, ...toolEnv({ chatId: this.#options.chatId, conversationId, rootId: this.#options.rootId(), cwd }) };
-		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env })) as string | undefined;
+		return (await fenceRefusal(path, { cwd, sessionId: this.#options.chatId, env, folder: this.#options.folder })) as string | undefined;
 	}
 
 	/**
 	 * `conversationId`'s execution environment: its file writes run in a sandboxed helper under the write fence a command
 	 * of it would get at that moment (DECISIONS D13), so a folder swapped for a link after `writeRefusal` leads nowhere.
-	 * Its temp folders (codemode's output files) are made in its PI_TMP by the same helper.
-	 * shortcut: the grants follow the chat folder as it resolves then, as every command's do; the fence-wide follow-up in
-	 * D13 (a chat folder swapped for a link) fixes both.
+	 * Its temp folders (codemode's output files) are made in its PI_TMP by the same helper. Grants come only from inside
+	 * the Chat's folder as resolved at its open (`chatFolder`), as its commands' do.
 	 */
 	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
-		const at = (signal: AbortSignal | undefined) => ({ cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal });
+		const at = (signal: AbortSignal | undefined) => ({ cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal, folder: this.#options.folder });
 		return new FencedEnv(options, {
 			write: async (path, content, signal) => {
 				if (this.#unfenced(conversationId)) return false;

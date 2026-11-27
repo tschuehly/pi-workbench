@@ -90,6 +90,10 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **`.envrc`:** no file named `.envrc` (any case, any depth) can be written: direnv runs it unfenced.
   `--backfill [--dry-run]` writes creation receipts for worktrees whose cleanup record names a Workstream but that were
   made unfenced, from that record (its sessions and Workstreams).
+- **Chat folder fixed at open:** the host resolves the Chat's folder once, when it first opens (Durable keeps it in the
+  Chat store as `fence-folder.json`; a legacy session at each session start), and writes it into every job record
+  (`folder`). A launch, write or edit whose folder then resolves outside it (a job swapped it for a link) gets nothing
+  from its folder: no checkout, scratch folder, Workstream receipts or grants.
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
   commits, branches and fetches work, `git gc` and repack fail inside the fence.

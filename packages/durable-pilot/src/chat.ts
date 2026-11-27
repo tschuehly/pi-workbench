@@ -30,7 +30,7 @@ import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
 import { CACHE_RETENTION, idleCompaction, type IdleGate } from "./idle-compact.ts";
-import { BackgroundBash } from "./background-bash.ts";
+import { BackgroundBash, chatFolder } from "./background-bash.ts";
 import { cheapWakeExtension, dropOverride, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
@@ -230,7 +230,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const chatId = options.chatId ?? options.dir;
 	let opened: Host | undefined;
 	// The lead is the active branch: history navigation may select another.
-	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, wake: (conversation, draft) => submitWake(conversation, draft, opened!.models) });
+	const bash = new BackgroundBash({ chatId, cwd: options.cwd, folder: options.readOnly === true ? undefined : chatFolder(options.dir, options.cwd), rootId: () => opened?.root.id, wake: (conversation, draft) => submitWake(conversation, draft, opened!.models) });
 	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
