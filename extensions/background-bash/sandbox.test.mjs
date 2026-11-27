@@ -339,7 +339,7 @@ test("a chat in its scratch folder may write the worktrees whose creation receip
   assert.match(out, /exit=0[\s\S]*wt remove[^\n]*is not available inside the sandbox[^\n]*\nexit=2/, out);
   assert.ok(existsSync(join(adopted, ".git")), "a cleanup owner cannot remove it");
   // The receipt names the chat and only the Workstream whose scratch folder it started in, never every one it is linked to.
-  const receipt = JSON.parse(readFileSync(join(meta, "lib.from-ws", "pi-creator.json"), "utf8"));
+  const receipt = JSON.parse(readFileSync(join(meta, "from-ws", "pi-creator.json"), "utf8"));
   assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["from-ws", ["sandbox-test"], ["ws-x"]]);
 });
 
@@ -399,7 +399,7 @@ test("a planted commondir or a relative hooks folder never runs through the work
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.match(out, /COMMONDIR_REFUSED[\s\S]*exit=0/);
-  assert.ok(existsSync(join(home, "IdeaProjects", "hooked.via-host", ".git")), out);
+  assert.ok(existsSync(join(home, "IdeaProjects", "hooked.worktrees", "via-host", ".git")), out);
   assert.equal(existsSync(join(home, "hook-ran")), false, "no hook ran outside the fence");
   // Planted by someone outside the fence: the host operation refuses the repo.
   writeFileSync(join(app, ".git", "commondir"), `${piTmp}\n`);
