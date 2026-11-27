@@ -21,6 +21,8 @@ export function pageMessagesAtSafeBoundary<T>(messages: T[], page?: MessagePageR
   for (let i = 0; i < before; i++) {
     const message = messages[i];
     const role = getString(message, "role");
+    // A call is pending only until a later prompt or finished reply: past that its result can never arrive.
+    if (role === "user" || (role === "assistant" && isFinishedReply(message))) pending.clear();
     // Old transcripts can omit tool IDs. Keep their leading results (including intervening notices) with the call.
     nextNonNotice = Math.max(i, nextNonNotice);
     while (nextNonNotice < before && getString(messages[nextNonNotice], "role") === "custom") nextNonNotice++;
@@ -48,6 +50,13 @@ export function pageMessagesAtSafeBoundary<T>(messages: T[], page?: MessagePageR
     }
   }
   return { messages: messages.slice(start, before), start, total };
+}
+
+function isFinishedReply(message: unknown): boolean {
+  const reason = getString(message, "stopReason");
+  if (reason === "aborted" || reason === "error") return false;
+  const content = getProperty(message, "content");
+  return !Array.isArray(content) || !content.some((part) => getString(part, "type") === "toolCall");
 }
 
 function getProperty(value: unknown, key: string): unknown {

@@ -343,6 +343,8 @@ export class ChatSession {
 	readonly #emit: (event: UiEvent) => void;
 	readonly #chatId: string;
 	readonly #telemetry: Recorder | undefined;
+	/** Events emitted so far: a status read that saw none finished is not older than the messages read after it. */
+	#emits = 0;
 	#entries: EntryRecord[] = [];
 	#partial: AssistantMessage | undefined;
 	/** Text of each partial block emitted so far, so deltas append exactly what is new. */
@@ -392,7 +394,10 @@ export class ChatSession {
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power>; title?: () => string | undefined } = {}) {
 		this.#host = host;
 		this.#chat = "workbench" in host ? host : undefined;
-		this.#emit = emit;
+		this.#emit = (event) => {
+			this.#emits++;
+			emit(event);
+		};
 		this.#chatId = options.chatId ?? "durable";
 		this.#telemetry = options.telemetry;
 		this.#power = { onBattery, alarm: batteryAlarm, everyMs: 60_000, ...options.power };
@@ -708,6 +713,19 @@ export class ChatSession {
 
 	partial(): unknown {
 		return this.#partial === undefined ? null : { ...this.#partial, streamId: this.#streamId };
+	}
+
+	/**
+	 * One snapshot whose status is not older than its messages: an event during the status read (an ask opening, a
+	 * turn starting) reads the status again. Messages are read last and handed to `send` with no yield in between.
+	 */
+	async snapshot(page: TranscriptPage | undefined, send: (transcript: Transcript) => void): Promise<void> {
+		// shortcut: gives up after 3 reads while events stream continuously (a status that old only lags a delta); read status in the same tick as the messages if that ever drops an ask.
+		for (let attempt = 1; ; attempt++) {
+			const seen = this.#emits;
+			const status = await this.status();
+			if (this.#emits === seen || attempt === 3) return send(this.transcript(status, page));
+		}
 	}
 
 	/** The whole transcript, or with `page` only that page (`pageTranscript`). */

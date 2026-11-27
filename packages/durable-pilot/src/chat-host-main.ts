@@ -299,7 +299,7 @@ async function handle(message: Request, reply: (message: unknown) => void): Prom
 			for (const value of [before, limit]) if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error("before and limit must be non-negative integers");
 			const page = before === undefined && limit === undefined ? undefined : { before: before as number | undefined, limit: limit as number | undefined };
 			// No yield between reading messages/partial and sending: the daemon stamps the watermark on receipt.
-			reply({ id: message.id, result: session.transcript(await session.status(), page) });
+			await session.snapshot(page, (result) => reply({ id: message.id, result }));
 			return;
 		}
 		const method = methods[message.method];

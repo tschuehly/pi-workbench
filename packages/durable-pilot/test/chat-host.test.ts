@@ -644,6 +644,21 @@ test("a paged transcript holds only its page, within the limit; chained earlier 
 		assert.deepEqual(paged.messages, all.messages.slice(paged.start));
 		assert.equal(paged.total, all.messages.length);
 		await settled(7);
+		// A turn starts while the snapshot reads the status: that status is older than the messages, so it is read again.
+		const readStatus = session.status.bind(session);
+		let reads = 0;
+		session.status = async () => {
+			const current = await readStatus();
+			if (++reads > 1) return current;
+			await session.prompt({ operationId: "op-8", text: "turn 8" });
+			return { ...current, stale: true };
+		};
+		let snapshot: Page & { status: Record<string, unknown> } | undefined;
+		await session.snapshot({ limit: 2 }, (transcript) => (snapshot = transcript as typeof snapshot));
+		assert.ok(reads >= 2, "the status is read again");
+		assert.equal(snapshot?.status.stale, undefined, "the reply carries the fresh status");
+		session.status = readStatus;
+		await settled(8);
 	} finally {
 		await session.close();
 	}

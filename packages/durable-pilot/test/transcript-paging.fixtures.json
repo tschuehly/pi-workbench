@@ -980,7 +980,7 @@
   "end": 3
  },
  {
-  "name": "an earlier result cannot answer a reused ID across a mode send notice and a user message",
+  "name": "an earlier result cannot answer a reused ID across a mode send notice",
   "messages": [
    {
     "role": "assistant",
@@ -1007,16 +1007,368 @@
    {
     "role": "custom",
     "content": "mode"
-   },
-   {
-    "role": "user",
-    "content": "mode notice"
    }
   ],
   "page": {
    "limit": 1
   },
   "start": 2,
-  "end": 5
+  "end": 4
+ },
+ {
+  "name": "a call that never got a result does not pin the page once a later prompt follows",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "lost",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u0"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a0"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u1"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a1"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u2"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a2"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u3"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a3"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u4"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a4"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u5"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a5"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u6"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a6"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u7"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a7"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u8"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a8"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u9"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a9"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u10"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a10"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u11"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a11"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 6,
+  "end": 26
+ },
+ {
+  "name": "a call that never got a result does not pin the page once a later finished reply follows",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "lost",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "done"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n0"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a0"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n1"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a1"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n2"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a2"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n3"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a3"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n4"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a4"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n5"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a5"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n6"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a6"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n7"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a7"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n8"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a8"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n9"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a9"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n10"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a10"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 5,
+  "end": 25
  }
 ]
