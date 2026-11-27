@@ -22,6 +22,7 @@
 // automatic upgrade), the host first stops admitting input and closes only if nothing but restart-surviving work runs;
 // otherwise it answers `{ closed: false, busy }` and keeps running. The host exits after `close` or on SIGTERM/SIGINT, and an IPC host also when its daemon goes away (disconnect),
 // closing the store gracefully first. A socket host stays when its daemon goes away.
+import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, realpathSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer, type Socket } from "node:net";
@@ -59,7 +60,7 @@ const { values } = parseArgs({
 		socket: { type: "string" },
 		"end-jobs": { type: "boolean" },
 		"read-transcript": { type: "boolean" },
-		"full-access-nonce": { type: "string" },
+		"full-access-sha256": { type: "string" },
 	},
 });
 if (values["end-jobs"] === true) {
@@ -70,8 +71,9 @@ if (values["end-jobs"] === true) {
 }
 if (values.store === undefined || values.cwd === undefined || values.model === undefined) throw new Error("--store, --cwd and --model are required");
 const socketPath = values.socket;
-/** One-shot: PI WEB's upgrade restart launched this host to carry `/full-access`; the first resume consumes it. */
-let fullAccessNonce = (values["full-access-nonce"]?.length ?? 0) >= 16 ? values["full-access-nonce"] : undefined;
+// A public verifier is safe in launchd; only the upgrading daemon holds the random preimage.
+let fullAccessDigest = values["full-access-sha256"];
+if (fullAccessDigest !== undefined && !/^[a-f0-9]{64}$/.test(fullAccessDigest)) throw new Error("Invalid --full-access-sha256 verifier");
 if (socketPath === undefined && process.send === undefined) throw new Error("chat-host-main must be started with an IPC channel or --socket");
 if (socketPath !== undefined) {
 	// Only the owner may reach the host: its folder admits nobody else (the socket itself is 0600 too).
@@ -339,13 +341,14 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	// The host after an Upgrade now: restored work resumes at once (recovery as after any restart), not paused.
 	resume: (params) => {
 		if (params.reason !== "upgrade-restart") throw new Error("resume needs reason upgrade-restart");
-		// Full access carried over from the old host: only a resume repeating the nonce PI WEB put in this host's launch
-		// arguments for its upgrade restart, and only before any other resume ran (ChatSession.resume). A missing or wrong nonce is
-		// refused whole (nothing resumes, the nonce stays for PI WEB's own resume); one already used, or none, is ignored.
-		const granted = fullAccessNonce !== undefined && params.fullAccess === fullAccessNonce;
-		if (fullAccessNonce !== undefined && !granted) throw new Error("resume refused: fullAccess is not this launch's upgrade nonce");
-		if (granted) fullAccessNonce = undefined;
-		else if (params.fullAccess !== undefined) console.error("resume: fullAccess ignored (no upgrade nonce in this launch, or already used)");
+		// Recovery explicitly abandons the previous daemon's grant, including one whose acknowledgement was lost.
+		const discard = params.discardFullAccess === true;
+		const nonce = params.fullAccess;
+		if (discard && nonce !== undefined) throw new Error("resume cannot both discard and grant full access");
+		const granted = fullAccessDigest !== undefined && typeof nonce === "string" && /^[a-f0-9]{32}$/.test(nonce) && createHash("sha256").update(nonce).digest("hex") === fullAccessDigest;
+		if (fullAccessDigest !== undefined && !granted && !discard) throw new Error("resume refused: fullAccess is not this launch's upgrade nonce");
+		fullAccessDigest = undefined;
+		if (discard) host.bash.carryFullAccess(false);
 		return session.resume("upgrade-restart", granted);
 	},
 };

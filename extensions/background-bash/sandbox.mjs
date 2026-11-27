@@ -103,7 +103,7 @@ export function ownedWorktrees(home, owners) {
  * granted only as its git checkout or worktree, or as one Workstream scratch folder; never home, ~/IdeaProjects, the
  * scratch root or Pi's own state, so a chat started there runs read-only. `worktrees` adds the chat's owned worktrees.
  */
-export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }) {
+export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], env = {} }) {
   home = real(home);
   cwd = real(cwd);
   const pw = join(home, ".pi-workbench");
@@ -141,7 +141,7 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
   write.push(join(home, AGENT_CACHES), join(home, RUNTIME));
   locked.push(join(home, RUNTIME));
-  return { write, read, reopen, locked, history, hidden: hiddenPaths(home) };
+  return { write, read, reopen, locked, history, hidden: hiddenPaths(home, env) };
 }
 
 // A missing entry can be created later. Keep its name and the real spelling through existing ancestors;
@@ -153,8 +153,11 @@ function denyTarget(path) {
   }
 }
 
-function hiddenPaths(home) {
-  const paths = PRIVATE.map((p) => join(home, p));
+function hiddenPaths(home, env) {
+  // Only the host control folders, not their sibling Chat stores and logs.
+  const paths = [...PRIVATE, ".pi-web/hosts", ".pi-web-durable/hosts"].map((p) => join(home, p));
+  if (env.PI_WEB_DATA_DIR) paths.push(resolve(env.PI_WEB_DATA_DIR, "hosts"));
+  for (const dir of [env.PI_WEB_DURABLE_HOST_DIR, env.PI_DURABLE_HOST_SOCKET_DIR]) if (dir) paths.push(resolve(dir));
   // Seatbelt denies names, not inodes: another hard link to the credential would not be covered.
   const auth = statSync(join(home, AUTH), { throwIfNoEntry: false });
   if (auth && auth.nlink !== 1) throw new Error("Cannot fence a multiply linked auth.json");
@@ -194,7 +197,7 @@ export function profile({ readOnly = false, write, read, reopen = [], locked = [
       return parents.length ? [`(deny file-write-unlink${parents.join("")})`] : [];
     }),
     // Refused before macOS asks, so no "node wants to access your Desktop" prompt appears (Thomas, 24 Nov).
-    ...(hidden.length ? [`(deny file-read* file-write-unlink file-link file-clone${hidden.map((h) => ` (subpath ${p(h)})`).join("")})`] : []),
+    ...(hidden.length ? [`(deny file-read* file-write* file-link file-clone${hidden.map((h) => ` (subpath ${p(h)})`).join("")})`] : []),
     // PI WEB and the Durable hosts run `!` commands and prompts outside the fence; no fenced command may reach them,
     // nor another job's host operations. Ports are digits only (checked in confine), so they enter as text.
     ...(ports.length ? [`(deny network-outbound${ports.map((port) => ` (remote ip "*:${port}")`).join("")})`] : []),
@@ -207,8 +210,7 @@ export function profile({ readOnly = false, write, read, reopen = [], locked = [
     // the hosts, PI WEB), which would run any code outside the fence.
     "(deny signal)",
     "(allow signal (target same-sandbox))",
-    // No inspecting processes outside this sandbox (ps of their arguments, lsof): a host's launch arguments hold its
-    // one-shot full-access nonce. Its own children share the sandbox and stay visible.
+    // No inspecting processes outside this sandbox; its own children stay visible.
     "(deny process-info* (target others))",
     "(allow process-info* (target same-sandbox))",
   ];
@@ -372,7 +374,7 @@ async function jobGrants({ cwd: at, sessionId }, env) {
   const cwd = real(at);
   const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
   const owners = [sessionId, started].filter((id) => typeof id === "string" && id !== "");
-  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
+  const rules = grants({ cwd: at, home, env, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
   return { home, owners, rules };
 }
 
@@ -454,7 +456,7 @@ function sandboxBin(env, home, what) {
 /** Run native readers (including recursive searches) under the read rules at every open, not a path precheck. */
 export function readLaunch(argv, env) {
   const home = env.HOME ?? homedir();
-  return { file: sandboxBin(env, home, "nothing was read"), args: sandboxArgs({ readOnly: true, write: [], read: [], hidden: hiddenPaths(home) }, argv) };
+  return { file: sandboxBin(env, home, "nothing was read"), args: sandboxArgs({ readOnly: true, write: [], read: [], hidden: hiddenPaths(home, env) }, argv) };
 }
 
 /**
@@ -523,9 +525,5 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
   const piWeb = piWebSockets(env, home);
   const net = { ports, sockets: [...piWeb, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
-  // Host launch files contain the nonce; session stores and logs remain readable to research and orientation tasks.
-  const hostDirs = [...new Set([join(env.PI_WEB_DATA_DIR || join(home, ".pi-web-durable"), "hosts"), env.PI_WEB_DURABLE_HOST_DIR]
-    .filter((dir) => typeof dir === "string" && dir !== "").map((dir) => real(resolve(dir))))];
-  const hidden = [...rules.hidden, ...hostDirs];
-  return { file: bin, args: sandboxArgs({ ...rules, hidden, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
+  return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }

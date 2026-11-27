@@ -468,9 +468,9 @@ export class BackgroundBash {
 		return { type: "done", message: "Full access is on for this Chat's own commands until /full-access off or the Chat ends (it stays on across Pi Workbench installs)." };
 	}
 
-	/** Whether full access is on; with `on`, PI WEB's upgrade restart turns it back on in the new host first. */
-	carryFullAccess(on = false): boolean {
-		if (on) this.#fullAccess = true;
+	/** Read the switch, or explicitly set it during an upgrade handoff or its recovery. */
+	carryFullAccess(on?: boolean): boolean {
+		if (on !== undefined) this.#fullAccess = on;
 		return this.#fullAccess;
 	}
 

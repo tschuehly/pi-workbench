@@ -937,7 +937,7 @@ export class ChatSession {
 	async resume(reason: "upgrade-restart", fullAccess = false): Promise<void> {
 		// Before any restored work runs: the old host's full access (its close answer), from PI WEB only, and never once
 		// something else already resumed this host.
-		if (!this.#resumed) this.#chat?.bash?.carryFullAccess(fullAccess);
+		if (fullAccess && !this.#resumed) this.#chat?.bash?.carryFullAccess(true);
 		await this.#resume();
 		this.#record("session.restart", { reason, ownerEpoch: this.#host.store.owner.epoch });
 		await this.#publishStatus();

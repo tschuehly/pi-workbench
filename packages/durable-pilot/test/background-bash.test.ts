@@ -725,6 +725,10 @@ test("fenced Chat reads project files and session.sqlite, not private folders or
 	const { cwd } = family("read-fence");
 	const home = join(ROOT, "read-home");
 	const auth = join(home, ".pi/agent/auth.json");
+	const hosts = join(home, "host-control");
+	mkdirSync(hosts, { recursive: true });
+	const plist = join(hosts, "upgrade-note");
+	writeFileSync(plist, "host control fixture");
 	const store = join(home, ".pi-web-durable/durable/example");
 	const db = join(store, "session.sqlite");
 	for (const dir of [".pi/agent", ".pi-web-durable/durable/example", "Documents"]) mkdirSync(join(home, dir), { recursive: true });
@@ -734,7 +738,7 @@ test("fenced Chat reads project files and session.sqlite, not private folders or
 	symlinkSync(auth, join(cwd, "alias"));
 	// A search starting in an allowed parent must not return a denied descendant.
 	writeFileSync(join(home, "public-note"), "public fixture");
-	const env = { HOME: home, PATH: process.env.PATH };
+	const env = { HOME: home, PATH: process.env.PATH, PI_WEB_DURABLE_HOST_DIR: hosts };
 	const { file, args } = readLaunch([process.execPath, fileURLToPath(new URL("../src/read-tool-main.ts", import.meta.url))], env);
 	for (const name of ["grep", "find", "ls"]) {
 		const input = JSON.stringify({ name, args: name === "ls" ? { path: join(home, "Documents") } : { pattern: name === "grep" ? "fixture" : "*note", path: home } });
@@ -742,13 +746,13 @@ test("fenced Chat reads project files and session.sqlite, not private folders or
 		if (name === "ls") assert.equal(result.status, 1, "cannot list Documents");
 		else if (result.status === 0) assert.match(result.stdout, /public-note/);
 		else assert.match(result.stderr, /not permitted|permission denied/i); // rg can report the refused traversal.
-		assert.doesNotMatch(result.stdout, /Documents\/note|private fixture/);
+		assert.doesNotMatch(result.stdout, /Documents\/note|private fixture|upgrade-note|host control fixture/);
 	}
-	const host = new ChatHost(store, cwd, { env: { HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi/agent") } });
+	const host = new ChatHost(store, cwd, { env: { ...env, PI_CODING_AGENT_DIR: join(home, ".pi/agent") } });
 	try {
 		await host.ready;
 		let n = 0;
-		for (const [path, allowed] of [["@~/.pi/agent/auth.json", false], ["~/Documents/note", false], ["alias", false], ["project.txt", true], [db, true]] as const) {
+		for (const [path, allowed] of [[plist, false], ["@~/.pi/agent/auth.json", false], ["~/Documents/note", false], ["alias", false], ["project.txt", true], [db, true]] as const) {
 			await host.call("prompt", { operationId: `read-${++n}`, text: call("read", { path, limit: 1 }) });
 			const end = await toolEnd(host, n);
 			assert.equal(end.isError, !allowed, path);

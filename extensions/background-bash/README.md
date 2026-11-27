@@ -95,7 +95,8 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   `wt remove`, `merge`, `step prune` or alias half-empties a worktree; Thomas removes worktrees, or a Chat with full
   access does (the withdrawn removal host operation could be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
-  a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
+  a macOS dialog. Subagents stay fenced. The setting survives a completed host upgrade; `/full-access off`, an ordinary
+  host restart, or recovery from an interrupted upgrade turns it off.
 - **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,
   bound in durable-pilot's `extensions.ts`): the grants its commands would get, links resolved, plus nothing inside a
   `.git/objects` folder. `/full-access` lifts it for the lead as for its commands; a host already inside a fence leaves

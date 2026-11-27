@@ -1,15 +1,16 @@
 // Write-fence tests on fake folders only: a fake HOME outside every temp folder, so the shared temp grant cannot
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
+import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, readLaunch, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -386,6 +387,29 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   }
 });
 
+test("a fenced Chat cannot read the upgrade handoff from the host socket, with either its command or its native reader fence", { skip }, async () => {
+  const { createServer } = await import("node:net");
+  const dir = mkdtempSync(join(tmpdir(), "grant-"));
+  const socket = join(dir, "host.sock");
+  const server = createServer((peer) => peer.end("grant fixture"));
+  try {
+    await new Promise((resolve, reject) => server.once("error", reject).listen(socket, resolve));
+    const nc = ["-d", "-U", "-w2", socket];
+    assert.equal((await promisify(execFile)("/usr/bin/nc", nc, { timeout: 5000 })).stdout, "grant fixture");
+    const env = { HOME: home, PI_DURABLE_HOST_SOCKET_DIR: dir };
+    const job = await run(`nc -U -w2 '${socket}' </dev/null && echo CONNECTED || echo BLOCKED`, { env });
+    assert.equal(job.state, "complete", job.error);
+    const output = readFileSync(job.logPath, "utf8");
+    assert.match(output, /BLOCKED/);
+    assert.doesNotMatch(output, /grant fixture/);
+    const reader = readLaunch(["/usr/bin/nc", ...nc], env);
+    await assert.rejects(promisify(execFile)(reader.file, reader.args, { timeout: 5000 }), { code: 1, stdout: "" });
+  } finally {
+    await new Promise((done) => server.close(done));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the socket deny rules cover PI WEB's data dir override and both defaults, its host-folder and sessiond-socket overrides, relative ones resolved", () => {
   assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "/x/data", PI_WEB_DURABLE_HOST_DIR: "/x/hosts", PI_WEB_SESSIOND_SOCKET: "/x/sd.sock" }, "/x/home"), ["/x/data", "/x/home/.pi-web", "/x/home/.pi-web-durable", "/x/hosts", "/x/sd.sock"]);
   assert.deepEqual(piWebSockets({ PI_WEB_DURABLE_HOST_DIR: "" }, "/x/home"), ["/x/home/.pi-web", "/x/home/.pi-web-durable"]);
@@ -407,8 +431,8 @@ test("the Seatbelt profile denies host files, while Durable stores and logs rema
   // Only host launch directories are read-denied; the durable folder (including stores and logs) is only a socket deny.
   assert.deepEqual(args.slice(0, 4), ["-D", "P0=/x/home/.pi-web-durable/hosts", "-D", "P1=/x/custom-hosts"]);
   assert.match(text, /\(deny network-outbound \(remote ip "\*:8504"\) \(remote ip "\*:9200"\)\)/);
-  assert.ok(text.includes('(deny file-read* file-write-unlink file-link file-clone (subpath (param "P0")) (subpath (param "P1")))'), text);
-  assert.ok(!text.includes('(deny file-read* (subpath (param "P2")))'), "the Durable store/log root is not hidden");
+  assert.ok(text.includes('(deny file-read* file-write* file-link file-clone (subpath (param "P0")) (subpath (param "P1")))'), text);
+  assert.ok(!text.split("\n").find((line) => line.startsWith("(deny file-read*"))?.includes('(param "P2")'), "the Durable store/log root is not hidden");
   assert.ok(text.includes('(deny network-outbound (remote unix-socket (subpath (param "P2"))))'), text);
   assert.ok(text.indexOf("(deny process-info* (target others))") < text.indexOf("(allow process-info* (target same-sandbox))"), text);
 });

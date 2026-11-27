@@ -1,4 +1,4 @@
 {
   "//": "Optional launch arguments this host code accepts; PI WEB passes one only to host code that lists it here.",
-  "accepts": ["--full-access-nonce"]
+  "accepts": ["--full-access-sha256"]
 }
