@@ -1031,7 +1031,8 @@ export class ChatSession {
 		// Admitted: a new turn follows, so this idle stretch is over (a refused input or a replayed operation leaves the timer armed).
 		if (existing === undefined) this.#cancelIdle();
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
-		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
+		// Only the owner's own input answers an attention request; PI WEB's Terminal-run notice (`owner-run:` operation) is a machine follow-up.
+		if (this.#chat !== undefined && !params.operationId.startsWith("owner-run:") && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
 		else if (block !== undefined) await this.#publishStatus();
 		// `fresh`: this call admitted a new input (PI WEB restarts the reply chain only then), not a replayed operation.
 		return { submissionId, fresh: existing === undefined };
