@@ -107,8 +107,18 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   Workstream whose scratch folder it started in). Only the receipt grants access: the cleanup record accumulates owners
   (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
   Inside the fence the real `wt` runs only `list`, `switch` and `config` (global options in exact forms only), so no
-  `wt remove`, `merge`, `step prune` or alias half-empties a worktree; Thomas removes worktrees, or a Chat with full
-  access does (the withdrawn removal host operation could be steered outside the fence).
+  `wt merge`, `step prune` or alias half-empties a worktree.
+  `wt remove [path|branch]` (no flags, one target) goes to the runner, which removes a linked worktree of a checkout
+  under `~/IdeaProjects`, whoever made it (Thomas, 27 Nov: pushed worktrees are removable by anyone), only when: its
+  git links agree and it is not locked or the main checkout; no path component is a link (checked again right before);
+  after `git fetch origin` its head is on an `origin/*` branch; `git status` shows nothing but a top-level
+  `node_modules` and `.scratch/`; it is not this Chat's folder, no running command works in it, and nothing in it or its
+  git metadata changed in the last 10 minutes (open Chats' folders cannot be detected reliably). `.scratch/` first moves
+  to `~/.pi-workbench/scratch/<ws>/rescued-<branch>-<date>/` (the Workstream from `pi-creator.json` or
+  `pi-owner.json`; none: refused). `git status`, the moves and `git worktree remove` (never `--force`) run under a
+  fence that writes only the worktree and its git folder, so a folder swapped for a link or a git filter script in the
+  checkout reaches nothing else. The branch goes only if merged into origin's default branch or equal to its origin
+  branch. Each refusal names its reason.
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
 - **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,

@@ -28,8 +28,13 @@ if (name === "wt") {
   const end = args.indexOf("--", i + 1);
   opts = end < 0 ? args.slice(i + 1) : args.slice(i + 1, end);
   // `help` is no wt subcommand: an alias or wt-help program of that name would run.
-  if (command !== undefined && !["list", "switch", "config", "-h", "--help", "-V", "--version"].includes(command)) {
-    process.stderr.write(`wt ${command}: is not available inside the sandbox (only list, switch and config run here; removing a worktree never); ask Thomas or turn on full access\n`);
+  if (command !== undefined && !["list", "switch", "config", "remove", "-h", "--help", "-V", "--version"].includes(command)) {
+    process.stderr.write(`wt ${command}: is not available inside the sandbox (only list, switch, config and the runner's remove run here); ask Thomas or turn on full access\n`);
+    process.exit(2);
+  }
+  // Only the runner removes (host-ops.mjs, pushed and clean worktrees); the real wt here never does.
+  if (command === "remove" && (i > 0 || !process.env.PI_HOST_OPS)) {
+    process.stderr.write(`wt remove: is not available inside the sandbox ${i > 0 ? "after global options; write `wt remove …` first" : "without its runner"}\n`);
     process.exit(2);
   }
   // The host operation takes `switch --create` first only; a prefixed one would run the real wt here, unrecorded.
@@ -51,7 +56,7 @@ if (name === "wt") {
   }
   if (command === "switch") switchAt = i;
 }
-const forwarded = name === "workstreams" || (name === "wt" && args[0] === "switch" && creates(opts));
+const forwarded = name === "workstreams" || (name === "wt" && ((args[0] === "switch" && creates(opts)) || args[0] === "remove"));
 if (!forwarded || !process.env.PI_HOST_OPS) {
   // The real program by its full path; the shim stays first on PATH for anything it starts (a wt alias or hook).
   // Compared by real path: any `wt` on PATH that is a link to this shim (in any folder) would run it again, forever.

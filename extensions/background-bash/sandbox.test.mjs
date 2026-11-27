@@ -2,7 +2,7 @@
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
@@ -143,12 +143,14 @@ test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a 
   assert.ok(!all.write.some((w) => w.startsWith("/private/") || w.startsWith("/var/")), "no shared system temp folder");
 });
 
-test("host operations: only `workstreams` (no @file) and `wt switch --create` with --base/--no-cd, never --execute, --clobber or `wt remove`", () => {
+test("host operations: only `workstreams` (no @file), `wt switch --create` with --base/--no-cd and `wt remove` of one target without flags, never --execute or --clobber", () => {
   assert.deepEqual(plan(["workstreams", "checkpoint", "ws-a", "--stdin"]), { file: "workstreams", args: ["checkpoint", "ws-a", "--stdin"] });
   assert.deepEqual(plan(["workstreams", "append", "@-"]).args, ["append", "@-"]);
   assert.deepEqual(plan(["wt", "switch", "-c", "feat", "-b", "main"]), { worktree: { branch: "feat", base: "main" } });
   assert.deepEqual(plan(["wt", "switch", "--create", "feat", "--no-cd", "--base=dev"]), { worktree: { branch: "feat", base: "dev" } });
-  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat"], ["wt", "remove", "-f", "-D"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
+  assert.deepEqual(plan(["wt", "remove", "feat"]), { remove: { target: "feat" } });
+  assert.deepEqual(plan(["wt", "remove"]), { remove: { target: undefined } });
+  for (const argv of [["wt", "switch", "-c", "feat", "-x", "rm -rf ~"], ["wt", "switch", "-c", "feat", "--clobber"], ["wt", "switch", "-c"], ["wt", "remove", "feat", "--force"], ["wt", "remove", "-f", "-D"], ["wt", "remove", "a", "b"], ["git", "push"], ["wt", "switch", "-c", "feat", "-C", "/"], ["wt", "switch", "-c", "feat", "--base=--upload-pack=x"], ["workstreams", "append", "@/Users/x/Documents/secret"]])
     assert.ok(plan(argv).error, argv.join(" "));
 });
 
@@ -227,7 +229,7 @@ test("inside the sandbox the real wt runs only list, switch and config: removal,
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.equal(out.match(/is not available inside the sandbox[^\n]*\nexit=2/g)?.length, refused.length + 1, out);
-  assert.match(out, /REAL_WT_RAN config\nwt remove: is not available inside the sandbox/, "a wt started by the real wt meets the shim too");
+  assert.match(out, /REAL_WT_RAN config\nwt remove: refused: /, "a wt started by the real wt meets the shim too");
   for (const r of Object.values(allowed)) assert.ok(out.includes(`REAL_WT_RAN ${r}\n`), r);
   assert.ok(existsSync(join(done, ".git")) && existsSync(receipt), "tree and receipt stay");
   assert.equal(git(main, "branch", "--list", "done", "--format=%(refname:short)").trim(), "done", "the branch stays");
@@ -284,6 +286,14 @@ test("wt shim: grouped short options, a repeated --no-hooks, options after `--`,
     const ran = wt(["list"], { path: [".", a], cwd: dot });
     assert.equal(ran.stdout, `DOT_WT ${join(realpathSync(dot), "wt")} list\n`, ran.stderr);
   });
+  await t.test("`wt remove` goes to the runner only: without one, or after global options, it is refused and the real wt never runs", () => {
+    for (const [args, why] of [[["remove", "x"], /without its runner/], [["-y", "remove", "x"], /after global options/]]) {
+      const refused = wt(args, { env: args[0] === "-y" ? { PI_HOST_OPS: join(root, "no-runner.sock") } : {} });
+      assert.equal(refused.status, 2, args.join(" "));
+      assert.match(refused.stderr, why);
+      assert.equal(refused.stdout, "");
+    }
+  });
   await t.test("only a regular file counts as the real wt, not a folder named wt", () => {
     const ran = wt(["list"], { path: [folder, a, realBin] });
     assert.equal(ran.stdout, "REAL_WT_RAN list\n", ran.stderr);
@@ -337,11 +347,51 @@ test("a chat in its scratch folder may write the worktrees whose creation receip
   assert.match(readFileSync(join(meta, "lib.mine", "pi-creator.json"), "utf8"), /child-1/, "its own creation receipt is unchanged");
   assert.match(readFileSync(join(meta, "lib.theirs", "pi-creator.json"), "utf8"), /another-chat/);
   const out = readFileSync(job.logPath, "utf8");
-  assert.match(out, /exit=0[\s\S]*wt remove[^\n]*is not available inside the sandbox[^\n]*\nexit=2/, out);
+  assert.match(out, /exit=0[\s\S]*wt remove: refused: [^\n]*\nexit=2/, out);
   assert.ok(existsSync(join(adopted, ".git")), "a cleanup owner cannot remove it");
   // The receipt names the chat and only the Workstream whose scratch folder it started in, never every one it is linked to.
   const receipt = JSON.parse(readFileSync(join(meta, "lib.from-ws", "pi-creator.json"), "utf8"));
   assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["from-ws", ["sandbox-test"], ["ws-x"]]);
+});
+
+test("fenced `wt remove` removes a pushed, clean worktree outside the fence with its git filters fenced, and refuses an unpushed one", { skip }, async () => {
+  const origin = join(root, "pushed-origin.git");
+  const app = join(home, "IdeaProjects", "pushed");
+  git(root, "init", "-q", "--bare", origin);
+  git(root, "clone", "-q", origin, app);
+  git(app, "commit", "-q", "--allow-empty", "-m", "init");
+  git(app, "push", "-q", "origin", "HEAD");
+  const done = join(home, "IdeaProjects", "pushed.worktrees", "done");
+  const unpushed = join(home, "IdeaProjects", "pushed.worktrees", "unpushed");
+  git(app, "worktree", "add", "-q", "-b", "done", done);
+  git(app, "worktree", "add", "-q", "-b", "unpushed", unpushed);
+  // A clean filter (Thomas's repo config) whose script sits in the checkout, where any fenced Chat could edit it.
+  const sentinel = join(home, "filter-escaped");
+  writeFileSync(join(done, "spy.sh"), `#!/bin/sh\ntouch "${sentinel}" 2>/dev/null; exec cat\n`, { mode: 0o755 });
+  git(app, "config", "filter.spy.clean", join(done, "spy.sh"));
+  writeFileSync(join(done, ".gitattributes"), "*.txt filter=spy\n");
+  writeFileSync(join(done, "a.txt"), "a\n");
+  git(done, "add", "-A");
+  git(done, "commit", "-q", "-m", "done");
+  git(done, "push", "-q", "origin", "done");
+  git(unpushed, "commit", "-q", "--allow-empty", "-m", "local only");
+  // Files an hour old (no Chat active there); a.txt is then stat-dirty, so git status runs the filter: unfenced it escapes.
+  const then = new Date(Date.now() - 3600_000);
+  const age = () => { for (const p of execFileSync("find", [done, unpushed, join(app, ".git", "worktrees")], { encoding: "utf8" }).trim().split("\n")) utimesSync(p, then, then); };
+  age();
+  rmSync(sentinel, { force: true });
+  git(done, "status", "--porcelain");
+  assert.ok(existsSync(sentinel), "the fixture's filter does run unfenced");
+  rmSync(sentinel);
+  age();
+  const job = await run(`wt remove done; echo "exit=$?"; wt remove unpushed; echo "exit=$?"`, { cwd: app, env: withFakes });
+  assert.equal(job.state, "complete", job.error);
+  const out = readFileSync(job.logPath, "utf8");
+  assert.match(out, /✓ Removed worktree [^\n]*pushed\.worktrees\/done; deleted branch done \(same as origin\/done\)\nexit=0/, out);
+  assert.match(out, /wt remove: refused: its head [0-9a-f]{12} is on no branch of origin; push it first; nothing was removed\nexit=2/, out);
+  assert.equal(existsSync(done), false);
+  assert.ok(existsSync(join(unpushed, ".git")));
+  assert.equal(existsSync(sentinel), false, "the filter ran only inside the narrowed fence");
 });
 
 test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or another job's host operations", { skip }, async () => {

@@ -499,6 +499,24 @@ export function writeError(stderr, path, code) {
   return Object.assign(new Error(cause === "EPERM" ? `Blocked by the write fence: ${path} could not be written (${detail})` : `${path} could not be written (${detail})`), { code: cause });
 }
 
+/** What no fenced process may reach: PI WEB's port, its and the hosts' sockets, other jobs' host operations. */
+function unreachable(env, home) {
+  const dataDirs = [env.PI_WEB_DATA_DIR, env.PI_DURABLE_HOST_SOCKET_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
+  const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
+  return { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")] };
+}
+
+/**
+ * `argv` for a host operation's own program on an agent's files (git status, worktree removal), fenced to write only
+ * `write`: a folder swapped for a link mid-way, or a git filter script in the checkout, reaches nothing beyond. As is
+ * when already inside a fence (the outer one holds); throws when no proven sandbox is available.
+ */
+export function narrowed(argv, write, env = process.env) {
+  if (!fenced() || alreadyFenced()) return argv;
+  const home = env.HOME ?? homedir();
+  return [sandboxBin(env, home, "nothing was run"), ...sandboxArgs({ write, read: [], hidden: PRIVATE.map((p) => join(real(home), p)), ...unreachable(env, home) }, argv)];
+}
+
 /**
  * The fenced launch for one job: `{ file, args, env }` to spawn in `job.cwd`, with the `owners` whose worktrees it may
  * write. Throws when no proven sandbox is
@@ -512,9 +530,7 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "the command was not run");
   const { owners, rules } = await jobGrants(job, env);
-  const dataDirs = [env.PI_WEB_DATA_DIR, env.PI_DURABLE_HOST_SOCKET_DIR, join(home, ".pi-web-durable")].filter((d) => typeof d === "string" && d !== "").map(real);
-  const ports = [...new Set([env.PI_WEB_PORT, "8506"].filter((port) => typeof port === "string" && /^\d{1,5}$/.test(port)))];
   const piTmp = typeof env.PI_TMP === "string" && env.PI_TMP !== "" ? real(env.PI_TMP) : undefined;
-  const net = { ports, sockets: [...dataDirs, join(userInfo().homedir, ".pi-workbench", "sandbox")], ownSocket };
+  const net = { ...unreachable(env, home), ownSocket };
   return { file: bin, args: sandboxArgs({ ...rules, ...net }, argv), env: fencedEnv(env, home, rules.write.includes(piTmp) ? piTmp : undefined), fenced: true, owners };
 }
