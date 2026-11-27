@@ -103,7 +103,7 @@ export function previewJob(job, chars) {
   return { command: redact(cleanOutput(job.command)).slice(0, 240), ...(job.description === undefined ? {} : { description: redact(cleanOutput(job.description)).slice(0, 120) }), output, logPath: job.logPath };
 }
 
-const VANISHED = "The job runner ended without recording an exit status";
+export const VANISHED = "The job runner ended without recording an exit status";
 
 /**
  * Launch a job under a caller-chosen ID (a host that persisted its launch intent first), idempotently: a job whose

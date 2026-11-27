@@ -22,7 +22,7 @@ import { AgentDoc, type Conversation, type ConversationId, defineExtension, defi
 import { err, FileError, type FileErrorCode, ok, type Result } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
-import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail } from "../../../extensions/background-bash/jobs.mjs";
+import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail, VANISHED } from "../../../extensions/background-bash/jobs.mjs";
 import { alreadyFenced, fenced, fencedMkdir, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
@@ -600,8 +600,9 @@ export class BackgroundBash {
 		const content = redact(`${claimed.owner ? `${OWNER_RUN_HEADER}\n` : ""}${completionContent(job, sealed(redact))}`);
 		const data = { customType: "background-bash", display: true, details: sanitizeDeep(describeJob(job), redact) };
 		const requestId = `background-bash:${job.id}`;
-		// A cancelled job's completion is context for the next turn; any other wakes the Chat (queued while it is busy).
-		if (job.state === "cancelled")
+		// A cancelled job's completion, or one a machine restart interrupted (often hours old), is context for the next
+		// turn: waking a cold Chat for it re-bills its whole prompt. Any other wakes the Chat (queued while it is busy).
+		if (job.state === "cancelled" || job.error?.startsWith(VANISHED))
 			await conversation.submit({ type: "write", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data, model: [{ role: "user", content, timestamp: Date.now() }] } }, context);
 		else {
 			const draft: InputSubmissionDraft = { type: "input", content, whenBusy: "followUp", requestId, entry: { kind: PACKAGE_MESSAGE_ENTRY, data } };

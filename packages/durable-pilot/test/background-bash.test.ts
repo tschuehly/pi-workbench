@@ -484,7 +484,7 @@ test("survival: a job that finishes while its host is gone delivers its completi
 	await third.close();
 });
 
-test("survival: a still-running job reattaches by its runner's identity; a runner lost with the machine reports an unknown exit and is never rerun", async () => {
+test("survival: a still-running job reattaches by its runner's identity; a runner lost with the machine reports an unknown exit as context, waking nothing, and is never rerun", async () => {
 	const { store, cwd } = family("machine-loss");
 	const first = new ChatHost(store, cwd);
 	await first.ready;
@@ -502,10 +502,11 @@ test("survival: a still-running job reattaches by its runner's identity; a runne
 	process.kill(-claim(id).pid, "SIGKILL"); // the machine going down takes the runner with it
 	const third = new ChatHost(store, cwd);
 	await third.ready;
-	await third.until(() => completionRequests(store) === 1, "the interrupted completion");
+	for (let i = 0; (await completions(third)).length === 0; i++) i < 200 ? await sleep(50) : assert.fail("no interrupted completion");
 	const [completion] = await completions(third);
 	assert.match(textOf(completion!.content), /failed \(exit unknown\)\. The job runner ended without recording an exit status \(interrupted/);
 	await new Promise((resolve) => setTimeout(resolve, 1000));
+	assert.equal(completionRequests(store), 0, "the interrupted completion wakes no model");
 	assert.equal(launches(cwd), 1, "never relaunched");
 	await third.close();
 });
