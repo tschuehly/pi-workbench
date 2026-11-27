@@ -3,6 +3,7 @@
 // a dropped connection leaves the host and its running turn alone, and the next connection reattaches to them.
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -30,13 +31,13 @@ after(() => {
 	cleanup();
 });
 
-function start(label: string, socket: string, tps = 40): { child: ChildProcess; store: string; exited: Promise<number | null>; stderr: () => string } {
+function start(label: string, socket: string, tps = 40, args: string[] = []): { child: ChildProcess; store: string; exited: Promise<number | null>; stderr: () => string } {
 	const dir = scratch(`socket-${label}`);
 	const cwd = join(dir, "workspace");
 	mkdirSync(cwd);
 	const store = join(dir, "family");
 	// No IPC channel: the host owns its life, as under launchd.
-	const child = spawn(process.execPath, [join(PACKAGE, "src", "chat-host-main.ts"), "--store", store, "--cwd", cwd, "--model", "faux", "--faux-tps", String(tps), "--socket", socket], { stdio: ["ignore", "ignore", "pipe"] });
+	const child = spawn(process.execPath, [join(PACKAGE, "src", "chat-host-main.ts"), "--store", store, "--cwd", cwd, "--model", "faux", "--faux-tps", String(tps), "--socket", socket, ...args], { stdio: ["ignore", "ignore", "pipe"] });
 	live.add(child);
 	let stderr = "";
 	child.stderr!.on("data", (data) => (stderr += data.toString()));
@@ -121,6 +122,33 @@ test("handshake names protocol, revision, store, owner epoch and PID; a dropped 
 	await second.call("close");
 	assert.equal(await host.exited, 0, host.stderr());
 	assert.equal(existsSync(path), false, "the host removes its socket on an orderly exit");
+});
+
+test("a daemon lost mid-grant recovers the same Chat OFF, even if the grant reached the host but its acknowledgement was lost", { skip: process.platform !== "darwin" }, async () => {
+	for (const applied of [false, true]) {
+		const path = join(mkdtempSync(join(SOCKETS, "g-")), "host.sock");
+		const nonce = randomBytes(16).toString("hex");
+		const digest = createHash("sha256").update(nonce).digest("hex");
+		const host = start("upgrade", path, 40, ["--full-access-sha256", digest]);
+		const first = await connected(path, host);
+		await first.ready;
+		const access = async (peer: Client) => (await peer.call<{ extensionStatuses: Record<string, string> }>("status")).extensionStatuses["workbench.full-access"];
+		await assert.rejects(first.call("resume", { reason: "upgrade-restart" }), /not this launch's upgrade nonce/);
+		await assert.rejects(first.call("resume", { reason: "upgrade-restart", fullAccess: digest }), /not this launch's upgrade nonce/);
+		if (applied) {
+			await first.call("resume", { reason: "upgrade-restart", fullAccess: nonce });
+			assert.equal(await access(first), "on");
+		}
+		first.socket.destroy();
+		const next = await connected(path, host);
+		await next.ready;
+		await next.call("resume", { reason: "upgrade-restart", discardFullAccess: true });
+		assert.equal(await access(next), "off");
+		await next.call("resume", { reason: "upgrade-restart", fullAccess: nonce });
+		assert.equal(await access(next), "off", "a late or replayed grant cannot re-enable it");
+		await next.call("close");
+		assert.equal(await host.exited, 0, host.stderr());
+	}
 });
 
 test("P064 a spawn_session request made while no daemon is connected is re-sent to the next daemon: one Chat, one result", async () => {

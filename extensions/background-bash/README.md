@@ -79,7 +79,10 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
   commits, branches and fetches work, `git gc` and repack fail inside the fence.
-- **Unreadable:** Desktop, Documents, Downloads, Pictures and other apps' data, so macOS never asks.
+- **Reads:** commands and Durable’s `read`, `grep`, `find`, `ls` and edit preview can read project files and Durable
+  session databases. They cannot read `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Pictures`, the `Containers`,
+  `Group Containers`, `Mail`, `Messages` and `Safari` folders in `~/Library`, or `~/.pi/agent/auth.json`, including
+  through symlinks. A nested Pi (including `scripts/pi-eval.mjs`) cannot use that login inside the fence.
 - **Unreachable:** PI WEB's port and the sockets in its data folder (they run `!` commands and prompts unfenced), other
   jobs' host-operation sockets, and Apple events.
 - **Host operations** (`host-ops.mjs`): shims first on the fenced PATH forward `workstreams` (no `@file` arguments) and
@@ -92,7 +95,8 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   `wt remove`, `merge`, `step prune` or alias half-empties a worktree; Thomas removes worktrees, or a Chat with full
   access does (the withdrawn removal host operation could be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
-  a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
+  a macOS dialog. Subagents stay fenced. The setting survives a completed host upgrade; `/full-access off`, an ordinary
+  host restart, or recovery from an interrupted upgrade turns it off.
 - **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,
   bound in durable-pilot's `extensions.ts`): the grants its commands would get, links resolved, plus nothing inside a
   `.git/objects` folder. `/full-access` lifts it for the lead as for its commands; a host already inside a fence leaves

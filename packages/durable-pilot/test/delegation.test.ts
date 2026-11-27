@@ -4,6 +4,7 @@
 // stop the host at the reporter's named fault windows (PI_DURABLE_HOLD), reopen it, and check one assignment, one
 // report and one collection.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
@@ -46,11 +47,11 @@ after(async () => {
 });
 
 /** A host with routed children on the scripted model; the quota snapshot is refreshed so routing never runs quota-axi. */
-function open(store: string, cwd: string, env: NodeJS.ProcessEnv = {}): ChatHost {
+function open(store: string, cwd: string, env: NodeJS.ProcessEnv = {}, args: string[] = []): ChatHost {
 	writeFileSync(QUOTA, JSON.stringify({ version: 1, checkedAt: Date.now(), status: 0, stdout: JSON.stringify({ providers: [] }), stderr: "" }));
 	const root = env.PI_BACKGROUND_BASH_ROOT ?? join(store, "bash-jobs");
 	JOB_ROOTS.add(root);
-	return new ChatHost(store, cwd, { tps: 5000, args: ["--scripted-providers", "--session-id", CHAT], env: { PI_BACKGROUND_BASH_ROOT: root, ...env } });
+	return new ChatHost(store, cwd, { tps: 5000, args: ["--scripted-providers", "--session-id", CHAT, ...args], env: { PI_BACKGROUND_BASH_ROOT: root, ...env } });
 }
 
 const call = (tool: string, args: object) => `call:${tool} ${JSON.stringify(args)}`;
@@ -1905,5 +1906,48 @@ test("/full-access: on only after Allow in the owner's dialog; then the lead's c
 	} finally {
 		await host.close();
 		rmSync(target, { recursive: true, force: true });
+	}
+});
+
+test("/full-access survives PI WEB's upgrade restart (the close answer, handed back in the first resume with the launch nonce), but a plain stop and start turns it off", { skip: process.platform !== "darwin" && "the write fence applies on macOS only" }, async () => {
+	const { store, cwd } = family("full-access-upgrade");
+	const dialog = join(store, "..", "fake-osascript");
+	writeFileSync(dialog, "#!/bin/sh\nprintf 'button returned:Allow\\n'\n", { mode: 0o755 });
+	const env = { PI_SANDBOX_OSASCRIPT: dialog };
+	const access = async (host: ChatHost) => (await host.call<Status>("status")).extensionStatuses?.["workbench.full-access"];
+	const first = open(store, cwd, env);
+	await first.ready;
+	assert.match((await first.call<{ message: string }>("command", { name: "full-access", args: "on" })).message, /until \/full-access off or the Chat ends/);
+	assert.deepEqual(await first.call("close", { reason: "upgrade", ifRestartSafe: true }), { closed: true, fullAccess: true });
+	assert.equal(await first.exited, 0);
+	// Any client's resume without this launch's nonce, or after the first resume, leaves it off.
+	const nonce = "0123456789abcdef0123456789abcdef";
+	const digest = createHash("sha256").update(nonce).digest("hex");
+	const forged = open(store, cwd, env);
+	await forged.ready;
+	await forged.call("resume", { reason: "upgrade-restart", fullAccess: true });
+	assert.equal(await access(forged), "off", "no nonce in this host's launch: an independent client's resume cannot turn it on");
+	await forged.close();
+	const raced = open(store, cwd, env, ["--full-access-sha256", digest]);
+	await raced.ready;
+	await assert.rejects(raced.call("resume", { reason: "upgrade-restart" }), /not this launch's upgrade nonce/);
+	await raced.call("resume", { reason: "upgrade-restart", fullAccess: nonce });
+	assert.equal(await access(raced), "on", "the refused bare resume did not consume the owner's grant");
+	await raced.close();
+	const upgraded = open(store, cwd, env, ["--full-access-sha256", digest]);
+	await upgraded.ready;
+	// A wrong nonce is refused whole and leaves the right one for PI WEB's own resume.
+	await assert.rejects(upgraded.call("resume", { reason: "upgrade-restart", fullAccess: true }), /not this launch's upgrade nonce/);
+	await assert.rejects(upgraded.call("resume", { reason: "upgrade-restart", fullAccess: "f".repeat(32) }), /not this launch's upgrade nonce/);
+	await assert.rejects(upgraded.call("resume", { reason: "upgrade-restart", fullAccess: digest }), /not this launch's upgrade nonce/);
+	await upgraded.call("resume", { reason: "upgrade-restart", fullAccess: nonce });
+	assert.equal(await access(upgraded), "on", "still on after the upgrade restart");
+	await upgraded.close();
+	const restarted = open(store, cwd, env);
+	try {
+		await restarted.ready;
+		assert.equal(await access(restarted), "off", "a plain stop and start resets it");
+	} finally {
+		await restarted.close();
 	}
 });

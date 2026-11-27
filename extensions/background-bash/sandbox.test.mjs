@@ -1,15 +1,16 @@
 // Write-fence tests on fake folders only: a fake HOME outside every temp folder, so the shared temp grant cannot
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
+import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, readLaunch, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -112,7 +113,12 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
     mkdirSync(join(home, dir), { recursive: true });
     writeFileSync(join(home, dir, "private.txt"), "private");
   }
-  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
+  const agent = join(home, ".pi", "agent");
+  mkdirSync(agent, { recursive: true });
+  const target = join(home, "synthetic-login");
+  writeFileSync(target, "{}");
+  symlinkSync(target, join(agent, "auth.json"));
+  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; for p in "$HOME/.pi/agent/auth.json" "$HOME/synthetic-login"; do cat "$p" >/dev/null 2>&1 && echo "READ login"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.doesNotMatch(out, /READ |LISTED /);
@@ -120,7 +126,7 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
 });
 
 test("inside a fence the runner starts commands under the outer fence instead of failing", { skip: process.platform !== "darwin" && "macOS only" }, () => {
-  const out = execFileSync("/usr/bin/sandbox-exec", ["-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
+  const out = execFileSync("/usr/bin/sandbox-exec", ["-D", `AUTH=${join(userInfo().homedir, ".pi/agent/auth.json")}`, "-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))(deny file-read* (literal (param "AUTH")))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
   assert.equal(out.trim(), "true /bin/bash");
   assert.equal(alreadyFenced(), false, "this test process itself is unfenced");
 });
@@ -350,6 +356,7 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   // A short socket path (the 104-byte limit): a stand-in PI WEB data folder in the system temp folder.
   const dataDir = mkdtempSync(join(tmpdir(), "pw-"));
   mkdirSync(join(dataDir, "hosts"));
+  mkdirSync(join(dataDir, "elsewhere"));
   // A host socket folder outside the data folder (PI_WEB_DURABLE_HOST_DIR), as the host announces it.
   const hostDir = mkdtempSync(join(tmpdir(), "ph-"));
   const otherOps = join(userInfo().homedir, ".pi-workbench", "sandbox", "ops", `test-${process.pid}.sock`);
@@ -361,14 +368,102 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
     await listen(join(hostDir, "h.sock"));
     const free = await listen(0);
     const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
+    // PI_WEB_DURABLE_HOST_DIR and PI_WEB_SESSIOND_SOCKET put host and daemon sockets outside the data dir.
+    await listen(join(dataDir, "elsewhere", "h.sock"));
+    await listen(join(dataDir, "sd.sock"));
     const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-U -w2 "${join(hostDir, "h.sock")}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir, PI_DURABLE_HOST_SOCKET_DIR: hostDir } });
     assert.equal(job.state, "complete", job.error);
     assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
+    // The overrides alone, with no PI_WEB_DATA_DIR naming their parent: still refused.
+    const elsewhere = join(dataDir, "elsewhere", "h.sock");
+    const overridden = await run([nc(`-U -w2 "${elsewhere}"`), nc(`-U -w2 "${join(dataDir, "sd.sock")}"`)].join("; "), { env: { PI_WEB_DURABLE_HOST_DIR: dirname(elsewhere), PI_WEB_SESSIOND_SOCKET: join(dataDir, "sd.sock") } });
+    assert.equal(overridden.state, "complete", overridden.error);
+    assert.deepEqual(readFileSync(overridden.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED"], "the overridden host folder and sessiond socket");
   } finally {
     for (const server of servers) server.close();
     rmSync(otherOps, { force: true });
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(hostDir, { recursive: true, force: true });
+  }
+});
+
+test("a fenced Chat cannot read the upgrade handoff from the host socket, with either its command or its native reader fence", { skip }, async () => {
+  const { createServer } = await import("node:net");
+  const dir = mkdtempSync(join(tmpdir(), "grant-"));
+  const socket = join(dir, "host.sock");
+  const server = createServer((peer) => peer.end("grant fixture"));
+  try {
+    await new Promise((resolve, reject) => server.once("error", reject).listen(socket, resolve));
+    const nc = ["-d", "-U", "-w2", socket];
+    assert.equal((await promisify(execFile)("/usr/bin/nc", nc, { timeout: 5000 })).stdout, "grant fixture");
+    const env = { HOME: home, PI_DURABLE_HOST_SOCKET_DIR: dir };
+    const job = await run(`nc -U -w2 '${socket}' </dev/null && echo CONNECTED || echo BLOCKED`, { env });
+    assert.equal(job.state, "complete", job.error);
+    const output = readFileSync(job.logPath, "utf8");
+    assert.match(output, /BLOCKED/);
+    assert.doesNotMatch(output, /grant fixture/);
+    const reader = readLaunch(["/usr/bin/nc", ...nc], env);
+    await assert.rejects(promisify(execFile)(reader.file, reader.args, { timeout: 5000 }), { code: 1, stdout: "" });
+  } finally {
+    await new Promise((done) => server.close(done));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the socket deny rules cover PI WEB's data dir override and both defaults, its host-folder and sessiond-socket overrides, relative ones resolved", () => {
+  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "/x/data", PI_WEB_DURABLE_HOST_DIR: "/x/hosts", PI_WEB_SESSIOND_SOCKET: "/x/sd.sock" }, "/x/home"), ["/x/data", "/x/home/.pi-web", "/x/home/.pi-web-durable", "/x/hosts", "/x/sd.sock"]);
+  assert.deepEqual(piWebSockets({ PI_WEB_DURABLE_HOST_DIR: "" }, "/x/home"), ["/x/home/.pi-web", "/x/home/.pi-web-durable"]);
+  assert.deepEqual(piWebSockets({ PI_WEB_DATA_DIR: "rel/data" }, "/x/home")[0], join(realpathSync(process.cwd()), "rel", "data"));
+});
+
+test("the port deny rule covers PI WEB's web port (variable, config file, defaults) and the sessiond TCP port", () => {
+  const config = join(root, "pi-web-config.json");
+  writeFileSync(config, JSON.stringify({ port: 9100 }));
+  assert.deepEqual(piWebPorts({ PI_WEB_PORT: "9000", PI_WEB_CONFIG: config, PI_WEB_SESSIOND_PORT: "9200" }, "/x/home"), ["9000", "9100", "8504", "8506", "9200"]);
+  mkdirSync(join(root, "xdg", "pi-web"), { recursive: true });
+  writeFileSync(join(root, "xdg", "pi-web", "config.json"), JSON.stringify({ port: 9300 }));
+  assert.deepEqual(piWebPorts({ XDG_CONFIG_HOME: join(root, "xdg"), PI_WEB_SESSIOND_PORT: "9.322e3", PORT: "9321" }, "/x/home"), ["9321", "9300", "8504", "8506", "9322"]);
+});
+
+test("the Seatbelt profile denies host files, while Durable stores and logs remain readable, and preserves port, socket and process-info rules", () => {
+  const args = profile({ write: [], read: [], hidden: ["/x/home/.pi-web-durable/hosts", "/x/custom-hosts"], ports: ["8504", "9200"], sockets: ["/x/home/.pi-web-durable"] });
+  const text = args[args.indexOf("-p") + 1];
+  // Only host launch directories are read-denied; the durable folder (including stores and logs) is only a socket deny.
+  assert.deepEqual(args.slice(0, 4), ["-D", "P0=/x/home/.pi-web-durable/hosts", "-D", "P1=/x/custom-hosts"]);
+  assert.match(text, /\(deny network-outbound \(remote ip "\*:8504"\) \(remote ip "\*:9200"\)\)/);
+  assert.ok(text.includes('(deny file-read* file-write* file-link file-clone (subpath (param "P0")) (subpath (param "P1")))'), text);
+  assert.ok(!text.split("\n").find((line) => line.startsWith("(deny file-read*"))?.includes('(param "P2")'), "the Durable store/log root is not hidden");
+  assert.ok(text.includes('(deny network-outbound (remote unix-socket (subpath (param "P2"))))'), text);
+  assert.ok(text.indexOf("(deny process-info* (target others))") < text.indexOf("(allow process-info* (target same-sandbox))"), text);
+});
+
+test("fenced commands cannot read host launch files, but can read Durable stores and logs; ports and process-info stay fenced", { skip }, async () => {
+  const { createServer } = await import("node:net");
+  const { spawn } = await import("node:child_process");
+  const servers = [];
+  const listen = (where) => new Promise((resolve, reject) => { const server = createServer((socket) => socket.end("hello\n")); servers.push(server); server.once("error", reject); server.listen(where, () => resolve(server)); });
+  const config = join(root, "web-config.json");
+  for (const dir of [".pi-web/hosts", ".pi-web-durable/hosts", ".pi-web-durable/durable/chat", ".pi-web-durable/logs"]) mkdirSync(join(home, dir), { recursive: true });
+  writeFileSync(join(home, ".pi-web", "hosts", "h.plist"), "nonce");
+  writeFileSync(join(home, ".pi-web-durable", "hosts", "h.plist"), "nonce");
+  writeFileSync(join(home, ".pi-web-durable", "durable/chat", "session.sqlite"), "store");
+  writeFileSync(join(home, ".pi-web-durable", "logs", "host.log"), "log");
+  try {
+    const sessiond = await listen(0);
+    const web = await listen(0);
+    writeFileSync(config, "{}");
+    const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
+    const read = (path) => `cat "${path}" >/dev/null 2>&1 && echo READ || echo UNREADABLE`;
+    const job = await run([
+      nc(`-w2 127.0.0.1 ${sessiond.address().port}`), nc(`-w2 localhost ${web.address().port}`),
+      read("$HOME/.pi-web-durable/hosts/h.plist"),
+      read("$HOME/.pi-web-durable/durable/chat/session.sqlite"), read("$HOME/.pi-web-durable/logs/host.log"),
+      "sleep 5 & ps -o pid= -p $! | grep -qw $! && echo CHILD_SEEN || echo CHILD_HIDDEN; kill $!",
+    ].join("; "), { env: { PI_WEB_SESSIOND_PORT: `${sessiond.address().port}e0`, PORT: String(web.address().port), PI_WEB_PORT: undefined, PI_WEB_CONFIG: config } });
+    assert.equal(job.state, "complete", job.error);
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "UNREADABLE", "READ", "READ", "CHILD_SEEN"]);
+  } finally {
+    for (const server of servers) server.close();
   }
 });
 
@@ -556,4 +651,19 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "DENIED Library/pnpm/store", "AGENT_CACHES_OK", `runtime=${join(home, ".pi-workbench", "sandbox-runtime")} 700`, "RUNTIME_CHMOD_DENIED", "RUNTIME_MOVE_DENIED", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
+});
+
+test("the read policy includes the login's real target, fails closed on a broken link, and leaves the session store visible", () => {
+  const h = mkdtempSync(join(root, "read-policy-"));
+  const dir = join(h, ".pi", "agent");
+  mkdirSync(dir, { recursive: true });
+  const target = join(h, "fixture");
+  symlinkSync(target, join(dir, "auth.json"));
+  const policy = () => grants({ cwd: h, home: h }).hidden;
+  assert.throws(policy, { code: "ENOENT" });
+  writeFileSync(target, "{}");
+  const hidden = policy();
+  assert.ok(hidden.includes(realpathSync.native(target)));
+  assert.ok(hidden.includes(join(h, ".pi/agent/auth.json")));
+  assert.ok(!hidden.some((p) => join(h, ".pi-web-durable/durable/id/session.sqlite").startsWith(`${p}/`)));
 });
