@@ -23,6 +23,7 @@ import {
 	type Tx,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
+import { pageMessagesAtSafeBoundary as pageTranscript, type MessagePageRequest } from "./message-paging.ts";
 import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CEILING_CUSTOM_TYPE, CEILING_ENTRY, CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
@@ -176,7 +177,14 @@ export type QueuedMessage = { id: number; kind: "steer" | "followUp"; text: stri
 export type UnresolvedEffect = { id: string; toolName: string; arguments: string };
 export type Resolution = "done" | "not-done" | "retry";
 
-export type Transcript = { messages: unknown[]; status: ChatStatus; partial: unknown };
+/** A page of `transcript`: the messages before index `before` (default the end), PI WEB's `pageMessagesAtSafeBoundary` cursor. */
+export type TranscriptPage = MessagePageRequest;
+export { pageTranscript };
+/**
+ * A paged read adds the page's `start` and the whole transcript's `total`, and `usage`: every assistant turn's usage
+ * fields and each context reset, so PI WEB re-derives cache-miss notices without the whole history.
+ */
+export type Transcript = { messages: unknown[]; status: ChatStatus; partial: unknown; start?: number; total?: number; usage?: unknown[] };
 
 /**
  * A tool result's content as PI WEB renders it: one text block (Durable appends harness notes such as an abort as
@@ -221,6 +229,17 @@ export async function storedMessages(host: Pick<Host, "harness" | "root">): Prom
 	await observation.detach();
 	const view = observation.value;
 	return (await history(host.root, view.entries.at(-1)?.id ?? view.before ?? 0)).flatMap((entry) => browserMessages(entry));
+}
+
+/** What PI WEB's cache-miss scan reads (`cacheScanEntries`): assistant usage fields and context resets. */
+function usageOnly(value: unknown): unknown[] {
+	const message = value as Record<string, unknown>;
+	if (message.role === "assistant" && message.usage !== undefined) {
+		const { role, provider, model, usage, timestamp, stopReason, entryId } = message;
+		return [{ role, provider, model, usage, timestamp, stopReason, entryId }];
+	}
+	if ((message.role === "system" && message.source === "compaction") || (message.role === "custom" && message.customType === CHECKPOINT_CUSTOM_TYPE)) return [{ role: message.role, source: message.source, customType: message.customType }];
+	return [];
 }
 
 export function browserMessages(entry: EntryRecord, streamId?: string): Record<string, unknown>[] {
@@ -344,6 +363,8 @@ export class ChatSession {
 	readonly #emit: (event: UiEvent) => void;
 	readonly #chatId: string;
 	readonly #telemetry: Recorder | undefined;
+	/** Events emitted so far: a status read that saw none finished is not older than the messages read after it. */
+	#emits = 0;
 	#entries: EntryRecord[] = [];
 	#partial: AssistantMessage | undefined;
 	/** Text of each partial block emitted so far, so deltas append exactly what is new. */
@@ -416,7 +437,10 @@ export class ChatSession {
 	constructor(host: Host | ChatHost, emit: (event: UiEvent) => void, options: { chatId?: string; telemetry?: Recorder; power?: Partial<Power>; title?: () => string | undefined; idleDelayMs?: typeof idleDelayMs; now?: () => number; idleNotes?: string } = {}) {
 		this.#host = host;
 		this.#chat = "workbench" in host ? host : undefined;
-		this.#emit = emit;
+		this.#emit = (event) => {
+			this.#emits++;
+			emit(event);
+		};
 		this.#chatId = options.chatId ?? "durable";
 		this.#telemetry = options.telemetry;
 		this.#power = { onBattery, alarm: batteryAlarm, everyMs: 60_000, ...options.power };
@@ -748,9 +772,8 @@ export class ChatSession {
 		}
 	}
 
-	/** The whole transcript as browser messages; PI WEB pages it. */
+	/** The whole transcript as browser messages. */
 	messages(): unknown[] {
-		// ponytail: sends the whole transcript per read; page in the host once Durable Chats grow long.
 		return this.#entries.flatMap((entry) => browserMessages(entry));
 	}
 
@@ -758,11 +781,26 @@ export class ChatSession {
 		return this.#partial === undefined ? null : { ...this.#partial, streamId: this.#streamId };
 	}
 
-	async transcript(): Promise<Transcript> {
-		// Captured before the await, so the page and partial match the events emitted so far.
-		const messages = this.messages();
+	/**
+	 * One snapshot whose status is not older than its messages: an event during the status read (an ask opening, a
+	 * turn starting) reads the status again. Messages are read last and handed to `send` with no yield in between.
+	 */
+	async snapshot(page: TranscriptPage | undefined, send: (transcript: Transcript) => void): Promise<void> {
+		// shortcut: gives up after 3 reads while events stream continuously (a status that old only lags a delta); read status in the same tick as the messages if that ever drops an ask.
+		for (let attempt = 1; ; attempt++) {
+			const seen = this.#emits;
+			const status = await this.status();
+			if (this.#emits === seen || attempt === 3) return send(this.transcript(status, page));
+		}
+	}
+
+	/** The whole transcript, or with `page` only that page (`pageTranscript`). */
+	transcript(status: ChatStatus, page?: TranscriptPage): Transcript {
+		// shortcut: flattens every entry in memory (the total and the usage scan need all of them); only the page crosses the socket. Walk #entries from the end with a cached count if reads get slow.
+		const all = this.messages();
 		const partial = this.partial();
-		return { messages, partial, status: await this.status() };
+		if (page === undefined) return { messages: all, partial, status };
+		return { ...pageTranscript(all, page), usage: all.flatMap(usageOnly), partial, status };
 	}
 
 	async status(): Promise<ChatStatus> {

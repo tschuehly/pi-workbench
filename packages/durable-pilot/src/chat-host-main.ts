@@ -217,7 +217,6 @@ const setViewed = (value: boolean): { was: boolean } => {
 };
 
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
-	transcript: () => session.transcript(),
 	status: () => session.status(),
 	info: () => session.info(),
 	prompt: (params) => {
@@ -350,6 +349,14 @@ const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "
 /** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
 async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {
 	try {
+		if (message.method === "transcript") {
+			const { before, limit } = message.params ?? {};
+			for (const value of [before, limit]) if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error("before and limit must be non-negative integers");
+			const page = before === undefined && limit === undefined ? undefined : { before: before as number | undefined, limit: limit as number | undefined };
+			// No yield between reading messages/partial and sending: the daemon stamps the watermark on receipt.
+			await session.snapshot(page, (result) => reply({ id: message.id, result }));
+			return;
+		}
 		const method = methods[message.method];
 		if (method === undefined) throw new Error(`Unknown method ${message.method}`);
 		const run = () => Promise.resolve(method(message.params ?? {}));

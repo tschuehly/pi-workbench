@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
-import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
+import { ChatSession, pageTranscript, piWebChatTitle } from "../src/chat-session.ts";
 import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
 import { submitWake } from "../src/cheap-wake.ts";
 import { AgentDoc, LiveDoc } from "@earendil-works/pi-durable";
@@ -186,6 +186,8 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	assert.ok(transcript.messages.every((m) => typeof m.entryId === "string"));
 	assert.equal(transcript.partial, null);
 	assert.equal(transcript.status.isStreaming, false);
+	assert.deepEqual(await host.call("transcript", { limit: 1 }), { ...transcript, messages: transcript.messages.slice(-1), start: 3, total: 4, usage: transcript.messages.filter((m) => m.role === "assistant").map(({ role, provider, model, usage, timestamp, stopReason, entryId }: Record<string, unknown>) => ({ role, provider, model, usage, timestamp, stopReason, entryId })) }, "a hard-limited page");
+	await assert.rejects(host.call("transcript", { limit: -1 }), /non-negative integers/);
 	// Every turn request asks for the long prompt-cache tier.
 	const retention = readLog<{ cacheRetention?: string }>(join(store, "requests.log")).map((line) => line.cacheRetention);
 	assert.deepEqual(retention, ["long", "long"]);
@@ -546,7 +548,55 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 	await quiet("closing the host stops the alarm");
 });
 
+test("pageTranscript agrees with PI WEB's pageMessagesAtSafeBoundary on the shared fixtures (copied from PI WEB's messagePaging.fixtures.json)", () => {
+	const fixtures = JSON.parse(readFileSync(new URL("./transcript-paging.fixtures.json", import.meta.url), "utf8")) as { name: string; messages: unknown[]; page: { before?: number; limit?: number } | null; start: number; end: number }[];
+	for (const { name, messages, page, start, end } of fixtures) {
+		assert.deepEqual(pageTranscript(messages, page ?? undefined), { start, total: messages.length, messages: messages.slice(start, end) }, name);
+	}
+});
+
+// Both projects also run the fixture expectations independently when only one checkout is available.
+const peer = process.env.PI_WEB_REPO;
+test("the host and PI WEB fallback return identical pages for every shared fixture and cursor", { skip: !peer }, async () => {
+	const { pageMessagesAtSafeBoundary } = await import(join(peer!, "src/server/sessions/messagePaging.ts")) as typeof import("../src/message-paging.ts");
+	const fixtures = JSON.parse(readFileSync(new URL("./transcript-paging.fixtures.json", import.meta.url), "utf8")) as { name: string; messages: unknown[] }[];
+	for (const { name, messages } of fixtures) {
+		for (let before = 0; before <= messages.length; before++) for (const page of [{ before }, { before, limit: 1 }, {}, undefined]) {
+			assert.deepEqual(pageTranscript(messages, page), pageMessagesAtSafeBoundary(messages, page), name);
+		}
+	}
+});
+
 /** An in-process Chat on the faux model (no real battery alarm), with its run count and an event-driven wait. */
+test("pageTranscript matches PI WEB's pageMessagesAtSafeBoundary: a hard limit that skips leading tool results; a 1,700-message turn chains back exactly once", () => {
+	const user = (content: string) => ({ role: "user", content });
+	const assistantText = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
+	const thinking = (text: string) => ({ role: "assistant", content: [{ type: "thinking", thinking: text }] });
+	const toolCall = (name: string) => ({ role: "assistant", content: [{ type: "toolCall", name }] });
+	const toolResult = (text: string) => ({ role: "toolResult", content: text });
+	const page = (start: number, total: number, messages: unknown[]) => ({ start, total, messages });
+	const turn = [user("a"), assistantText("b"), user("c")];
+	assert.deepEqual(pageTranscript(turn, { limit: 1 }), page(2, 3, turn.slice(2)));
+	const midTurn = [user("prompt"), thinking("plan"), toolCall("read"), toolResult("ok"), thinking("next"), assistantText("answer")];
+	assert.deepEqual(pageTranscript(midTurn, { before: 5, limit: 2 }), page(4, 6, midTurn.slice(4, 5)));
+	const results = [user("prompt"), toolCall("read"), toolResult("a"), toolResult("b"), assistantText("answer")];
+	assert.deepEqual(pageTranscript(results, { limit: 3 }), page(4, 5, results.slice(4)));
+	assert.deepEqual(pageTranscript(results, { before: 4, limit: 3 }), page(1, 5, results.slice(1, 4)));
+	const messages: unknown[] = [user("prompt")];
+	while (messages.length < 1_700) messages.push(...(messages.length % 3 === 1 ? [toolCall("read")] : messages.length % 3 === 2 ? [toolResult("ok")] : [thinking("next")]));
+	assert.equal(pageTranscript(messages, {}).messages.length, 20, "20 by default");
+	const seen: unknown[] = [];
+	let before: number | undefined;
+	for (let guard = 0; guard < 1_700; guard += 1) {
+		const result = pageTranscript(messages, { ...(before === undefined ? {} : { before }), limit: 20 });
+		assert.ok(result.messages.length > 0 && result.messages.length <= 20);
+		seen.unshift(...result.messages);
+		if (result.start === 0) break;
+		before = result.start;
+	}
+	assert.deepEqual(seen, messages);
+});
+
 async function quietChat(label: string) {
 	const { store, cwd } = family(label);
 	const h = await openChatHost({ dir: store, cwd, model: "faux", chatId: `chat-${label}` });
@@ -1287,6 +1337,63 @@ test("Working Mode: a held status cannot report the branch retired by navigation
 		assert.equal(mode(await delayed).selected.alignment, "Default");
 	} finally {
 		release.resolve();
+		await session.close();
+	}
+});
+
+test("a paged transcript holds only its page, within the limit; chained earlier pages cover it exactly once; the partial matches a whole read", async () => {
+	const { session, settled } = await quietChat("paging");
+	type Page = { messages: { role: string; entryId?: string; usage?: unknown; content?: unknown }[]; start: number; total: number; usage: { entryId?: string; usage?: unknown; content?: unknown }[]; partial: unknown };
+	const read = async (page?: { before?: number; limit?: number }) => session.transcript(await session.status(), page) as Page;
+	const bash = `call:bash ${JSON.stringify({ command: "echo hi", description: "Echo", foreground: true })}`;
+	try {
+		for (let turn = 1; turn <= 6; turn++) {
+			await session.prompt({ operationId: `op-${String(turn)}`, text: turn % 2 === 0 ? bash : `turn ${String(turn)}` });
+			await settled(turn);
+		}
+		const whole = (await read()).messages as Page["messages"];
+		const last = await read({ limit: 3 });
+		assert.equal(last.total, whole.length);
+		assert.deepEqual(last.messages, whole.slice(-3), "a hard limit, not back to the turn's user message");
+		assert.equal(last.start, whole.length - 3);
+		const pages = [last.messages];
+		for (let start = last.start; start > 0;) {
+			const earlier = await read({ before: start, limit: 3 });
+			assert.ok(earlier.messages.length > 0 && earlier.messages.length <= 3);
+			assert.notEqual(earlier.messages[0]!.role, "toolResult", "no result without its call");
+			pages.unshift(earlier.messages);
+			start = earlier.start;
+		}
+		assert.deepEqual(pages.flat(), whole, "every message once, in order");
+		const assistants = whole.filter((m) => m.role === "assistant");
+		assert.deepEqual(last.usage.map((m) => [m.entryId, m.usage]), assistants.map((m) => [m.entryId, m.usage]), "every turn's usage, for cache-miss notices");
+		assert.ok(last.usage.every((m) => m.content === undefined), "usage only, no content");
+		await session.prompt({ operationId: "op-7", text: "gen" });
+		while (session.partial() === null) await new Promise((resolve) => setTimeout(resolve, 5));
+		const status = await session.status();
+		const paged = session.transcript(status, { limit: 2 }) as Page;
+		const all = session.transcript(status);
+		assert.notEqual(paged.partial, null);
+		assert.deepEqual(paged.partial, all.partial);
+		assert.deepEqual(paged.messages, all.messages.slice(paged.start));
+		assert.equal(paged.total, all.messages.length);
+		await settled(7);
+		// A turn starts while the snapshot reads the status: that status is older than the messages, so it is read again.
+		const readStatus = session.status.bind(session);
+		let reads = 0;
+		session.status = async () => {
+			const current = await readStatus();
+			if (++reads > 1) return current;
+			await session.prompt({ operationId: "op-8", text: "turn 8" });
+			return { ...current, stale: true };
+		};
+		let snapshot: Page & { status: Record<string, unknown> } | undefined;
+		await session.snapshot({ limit: 2 }, (transcript) => (snapshot = transcript as typeof snapshot));
+		assert.ok(reads >= 2, "the status is read again");
+		assert.equal(snapshot?.status.stale, undefined, "the reply carries the fresh status");
+		session.status = readStatus;
+		await settled(8);
+	} finally {
 		await session.close();
 	}
 });

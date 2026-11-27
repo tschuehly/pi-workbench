@@ -1,0 +1,1374 @@
+[
+ {
+  "name": "no page returns everything",
+  "messages": [
+   {
+    "role": "user",
+    "content": "hello"
+   }
+  ],
+  "page": null,
+  "start": 0,
+  "end": 1
+ },
+ {
+  "name": "a turn boundary pages normally",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "b"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "c"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 2,
+  "end": 3
+ },
+ {
+  "name": "never more than the limit mid-turn",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "plan"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "thinking",
+      "thinking": "next"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "answer"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 5,
+   "limit": 2
+  },
+  "start": 4,
+  "end": 5
+ },
+ {
+  "name": "leading tool results go to the earlier page",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "content": "a"
+   },
+   {
+    "role": "toolResult",
+    "content": "b"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "answer"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 3
+  },
+  "start": 4,
+  "end": 5
+ },
+ {
+  "name": "a page may start on the call",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "content": "a"
+   },
+   {
+    "role": "toolResult",
+    "content": "b"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "answer"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 4,
+   "limit": 3
+  },
+  "start": 1,
+  "end": 4
+ },
+ {
+  "name": "a page of only results starts at their call message",
+  "messages": [
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "content": "0"
+   },
+   {
+    "role": "toolResult",
+    "content": "1"
+   },
+   {
+    "role": "toolResult",
+    "content": "2"
+   },
+   {
+    "role": "toolResult",
+    "content": "3"
+   },
+   {
+    "role": "toolResult",
+    "content": "4"
+   },
+   {
+    "role": "toolResult",
+    "content": "5"
+   },
+   {
+    "role": "toolResult",
+    "content": "6"
+   },
+   {
+    "role": "toolResult",
+    "content": "7"
+   },
+   {
+    "role": "toolResult",
+    "content": "8"
+   },
+   {
+    "role": "toolResult",
+    "content": "9"
+   },
+   {
+    "role": "toolResult",
+    "content": "10"
+   },
+   {
+    "role": "toolResult",
+    "content": "11"
+   },
+   {
+    "role": "toolResult",
+    "content": "12"
+   },
+   {
+    "role": "toolResult",
+    "content": "13"
+   },
+   {
+    "role": "toolResult",
+    "content": "14"
+   },
+   {
+    "role": "toolResult",
+    "content": "15"
+   },
+   {
+    "role": "toolResult",
+    "content": "16"
+   },
+   {
+    "role": "toolResult",
+    "content": "17"
+   },
+   {
+    "role": "toolResult",
+    "content": "18"
+   },
+   {
+    "role": "toolResult",
+    "content": "19"
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 0,
+  "end": 21
+ },
+ {
+  "name": "a page of only results after a prompt starts at their call message",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "content": "0"
+   },
+   {
+    "role": "toolResult",
+    "content": "1"
+   },
+   {
+    "role": "toolResult",
+    "content": "2"
+   },
+   {
+    "role": "toolResult",
+    "content": "3"
+   },
+   {
+    "role": "toolResult",
+    "content": "4"
+   },
+   {
+    "role": "toolResult",
+    "content": "5"
+   },
+   {
+    "role": "toolResult",
+    "content": "6"
+   },
+   {
+    "role": "toolResult",
+    "content": "7"
+   },
+   {
+    "role": "toolResult",
+    "content": "8"
+   },
+   {
+    "role": "toolResult",
+    "content": "9"
+   },
+   {
+    "role": "toolResult",
+    "content": "10"
+   },
+   {
+    "role": "toolResult",
+    "content": "11"
+   },
+   {
+    "role": "toolResult",
+    "content": "12"
+   },
+   {
+    "role": "toolResult",
+    "content": "13"
+   },
+   {
+    "role": "toolResult",
+    "content": "14"
+   },
+   {
+    "role": "toolResult",
+    "content": "15"
+   },
+   {
+    "role": "toolResult",
+    "content": "16"
+   },
+   {
+    "role": "toolResult",
+    "content": "17"
+   },
+   {
+    "role": "toolResult",
+    "content": "18"
+   },
+   {
+    "role": "toolResult",
+    "content": "19"
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 1,
+  "end": 22
+ },
+ {
+  "name": "before without limit defaults to 20",
+  "messages": [
+   {
+    "role": "user",
+    "content": "0"
+   },
+   {
+    "role": "user",
+    "content": "1"
+   },
+   {
+    "role": "user",
+    "content": "2"
+   },
+   {
+    "role": "user",
+    "content": "3"
+   },
+   {
+    "role": "user",
+    "content": "4"
+   },
+   {
+    "role": "user",
+    "content": "5"
+   },
+   {
+    "role": "user",
+    "content": "6"
+   },
+   {
+    "role": "user",
+    "content": "7"
+   },
+   {
+    "role": "user",
+    "content": "8"
+   },
+   {
+    "role": "user",
+    "content": "9"
+   },
+   {
+    "role": "user",
+    "content": "10"
+   },
+   {
+    "role": "user",
+    "content": "11"
+   },
+   {
+    "role": "user",
+    "content": "12"
+   },
+   {
+    "role": "user",
+    "content": "13"
+   },
+   {
+    "role": "user",
+    "content": "14"
+   },
+   {
+    "role": "user",
+    "content": "15"
+   },
+   {
+    "role": "user",
+    "content": "16"
+   },
+   {
+    "role": "user",
+    "content": "17"
+   },
+   {
+    "role": "user",
+    "content": "18"
+   },
+   {
+    "role": "user",
+    "content": "19"
+   },
+   {
+    "role": "user",
+    "content": "20"
+   },
+   {
+    "role": "user",
+    "content": "21"
+   },
+   {
+    "role": "user",
+    "content": "22"
+   },
+   {
+    "role": "user",
+    "content": "23"
+   },
+   {
+    "role": "user",
+    "content": "24"
+   },
+   {
+    "role": "user",
+    "content": "25"
+   },
+   {
+    "role": "user",
+    "content": "26"
+   },
+   {
+    "role": "user",
+    "content": "27"
+   },
+   {
+    "role": "user",
+    "content": "28"
+   },
+   {
+    "role": "user",
+    "content": "29"
+   }
+  ],
+  "page": {
+   "before": 30
+  },
+  "start": 10,
+  "end": 30
+ },
+ {
+  "name": "a page of only results walks back across a notice to their call",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "customType": "notice",
+    "content": "cache miss",
+    "display": true
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 1,
+  "end": 23
+ },
+ {
+  "name": "a notice before leading tool results goes to the earlier page with them",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "customType": "notice",
+    "content": "cache miss",
+    "display": true
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "toolResult",
+    "content": "ok"
+   },
+   {
+    "role": "user",
+    "content": "next"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "done"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 7,
+   "limit": 5
+  },
+  "start": 5,
+  "end": 7
+ },
+ {
+  "name": "the newest page starts at a call of the running turn still waiting for a result, past the limit",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     },
+     {
+      "type": "toolCall",
+      "id": "c2",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "c1",
+    "content": "ok"
+   },
+   {
+    "role": "custom",
+    "content": "child finished"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 1,
+  "end": 4
+ },
+ {
+  "name": "a call id reused from an earlier turn is still waiting in the running turn",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "c1",
+    "content": "ok"
+   },
+   {
+    "role": "user",
+    "content": "b"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "child finished"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 4,
+  "end": 6
+ },
+ {
+  "name": "an aborted partial cannot pin the page, even without another prompt",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ],
+    "stopReason": "aborted"
+   },
+   {
+    "role": "custom",
+    "content": "notice"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "answer"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 3,
+  "end": 4
+ },
+ {
+  "name": "the page before a waiting call keeps the limit",
+  "messages": [
+   {
+    "role": "user",
+    "content": "a"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "b"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "c1",
+      "name": "read"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "before": 3,
+   "limit": 1
+  },
+  "start": 2,
+  "end": 3
+ },
+ {
+  "name": "an earlier result cannot answer a reused ID across a mode send notice",
+  "messages": [
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "again"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "again"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "again"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "mode"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 2,
+  "end": 4
+ },
+ {
+  "name": "a call that never got a result does not pin the page once a later prompt follows",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "lost",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u0"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a0"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u1"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a1"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u2"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a2"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u3"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a3"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u4"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a4"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u5"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a5"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u6"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a6"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u7"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a7"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u8"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a8"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u9"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a9"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u10"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a10"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "u11"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a11"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 6,
+  "end": 26
+ },
+ {
+  "name": "a call that never got a result does not pin the page once a later finished reply follows",
+  "messages": [
+   {
+    "role": "user",
+    "content": "prompt"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "lost",
+      "name": "read"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "done"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n0"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a0"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n1"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a1"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n2"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a2"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n3"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a3"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n4"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a4"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n5"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a5"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n6"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a6"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n7"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a7"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n8"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a8"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n9"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a9"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "n10"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "a10"
+     }
+    ]
+   }
+  ],
+  "page": {
+   "limit": 20
+  },
+  "start": 5,
+  "end": 25
+ }
+]
