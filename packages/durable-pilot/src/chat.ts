@@ -25,6 +25,7 @@ import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
 import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, refreshExpiredLogins, registeredProviders, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
 import { redact, wrapProvider } from "./redact.ts";
+import { fencedReader } from "./fenced-reader.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
@@ -76,7 +77,7 @@ export function previewingEdit(edit = createEditTool()): typeof edit {
 }
 
 /** Prompt sections in Pi's order (preamble, addendum, project context, skills, cwd); resources come from PI WEB. */
-export function chatTools(resources: () => Resources, cwd: string) {
+export function chatTools(resources: () => Resources, cwd: string, bash?: BackgroundBash) {
 	return defineExtension({
 		name: "workbench.chat",
 		sections: [
@@ -89,7 +90,7 @@ export function chatTools(resources: () => Resources, cwd: string) {
 		// read has no external effect, so a crash mid-read may rerun it; write and edit stay unsafe (never rerun). bash is
 		// the Workbench one (background-bash.ts). grep/find/ls: Pi's own, offered only where an allowlist names them
 		// (children), as in legacy Chats.
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), previewingEdit(), ...searchTools(cwd)],
+		tools: [fencedReader({ ...createReadTool(), replay: "safe" as const }, bash), createWriteTool(), previewingEdit(), ...searchTools(cwd).map((tool) => fencedReader(tool, bash))],
 	});
 }
 
@@ -243,7 +244,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
 	// tools, replaces their bash.
 	const extensions: Extension[] = [
-		chatTools(() => workbench.resources, options.cwd),
+		chatTools(() => workbench.resources, options.cwd, bash),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
 		workbenchExtensions(options.cwd, (path, cwd, conversationId) => bash.writeRefusal(path, cwd, conversationId)),
 		checkpointExtension(() => opened!.harness, { rootId: () => opened?.root.id, workstream: () => homeWorkstream(chatId) }),

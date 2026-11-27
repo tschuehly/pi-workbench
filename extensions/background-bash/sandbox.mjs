@@ -11,7 +11,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 // Absolute: never a sandbox-exec found on the command's PATH. Codex and srt crash Chromium (Thomas chose this, 24 Nov).
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 // Thomas's private folders and other apps' data: unreadable, so macOS never shows a permission prompt for them.
-const PRIVATE = ["Desktop", "Documents", "Downloads", "Pictures", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages", "Library/Safari"];
+const AUTH = ".pi/agent/auth.json";
+const PRIVATE = ["Desktop", "Documents", "Downloads", "Pictures", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages", "Library/Safari", AUTH];
 // Thomas's caches are all read-only to fenced commands: unfenced tools load code from them (Python's .pyc, pnpm dlx,
 // Homebrew's bootsnap, jars, browsers). Fenced commands get their own, pointed at through the environment (Thomas,
 // 24 Nov); a tool without such a setting just does not cache inside the fence.
@@ -140,14 +141,31 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   if (typeof scratch === "string" && scratch !== "" && dirname(real(scratch)) === scratchRoot && grantable(real(scratch))) write.push(real(scratch));
   write.push(join(home, AGENT_CACHES), join(home, RUNTIME));
   locked.push(join(home, RUNTIME));
-  return { write, read, reopen, locked, history, hidden: PRIVATE.map((p) => join(home, p)) };
+  return { write, read, reopen, locked, history, hidden: hiddenPaths(home) };
+}
+
+// A missing entry can be created later. Keep its name and the real spelling through existing ancestors;
+// a broken link, loop or permission error must never silently drop a deny.
+function denyTarget(path) {
+  try { return realpathSync.native(path); } catch (error) {
+    if (error.code !== "ENOENT" || lstatSync(path, { throwIfNoEntry: false }) || dirname(path) === path) throw error;
+    return join(denyTarget(dirname(path)), basename(path));
+  }
+}
+
+function hiddenPaths(home) {
+  const paths = PRIVATE.map((p) => join(home, p));
+  // Seatbelt denies names, not inodes: another hard link to the credential would not be covered.
+  const auth = statSync(join(home, AUTH), { throwIfNoEntry: false });
+  if (auth && auth.nlink !== 1) throw new Error("Cannot fence a multiply linked auth.json");
+  return [...new Set(paths.flatMap((path) => [path, denyTarget(path)]))];
 }
 
 /**
  * The Seatbelt profile: everything as today except writes, which only the grants get, and
  * reads of Thomas's private folders. Later rules win. Paths enter as -D parameters, never as profile text.
  */
-function profile({ write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
+function profile({ readOnly = false, write, read, reopen = [], locked = [], history = [], hidden, ports = [], sockets = [], ownSocket }) {
   const params = [];
   const p = (path) => { params.push(`-D`, `P${params.length / 2}=${path}`); return `(param "P${params.length / 2 - 1}")`; };
   const rules = [
@@ -169,8 +187,14 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
     ] : []),
     // A grant's own folder cannot be deleted or renamed away, only its contents.
     ...(write.length ? [`(deny file-write-unlink${write.map((w) => ` (literal ${p(w)})`).join("")})`] : []),
+    // A denied target can live inside a grant (e.g. a symlinked credential). Its contents and its name must stay put.
+    ...hidden.flatMap((h) => {
+      const parents = [];
+      for (let dir = dirname(h); write.some((w) => inside(dir, w)); dir = dirname(dir)) parents.push(` (literal ${p(dir)})`);
+      return parents.length ? [`(deny file-write-unlink${parents.join("")})`] : [];
+    }),
     // Refused before macOS asks, so no "node wants to access your Desktop" prompt appears (Thomas, 24 Nov).
-    ...(hidden.length ? [`(deny file-read*${hidden.map((h) => ` (subpath ${p(h)})`).join("")})`] : []),
+    ...(hidden.length ? [`(deny file-read* file-write-unlink file-link file-clone${hidden.map((h) => ` (subpath ${p(h)})`).join("")})`] : []),
     // PI WEB and the Durable hosts run `!` commands and prompts outside the fence; no fenced command may reach them,
     // nor another job's host operations. Ports are digits only (checked in confine), so they enter as text.
     ...(ports.length ? [`(deny network-outbound${ports.map((port) => ` (remote ip "*:${port}")`).join("")})`] : []),
@@ -178,6 +202,7 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
     ...(ownSocket ? [`(allow network-outbound (remote unix-socket (path-literal ${p(ownSocket)})))`] : []),
     // No Apple events: osascript could otherwise make Terminal or System Events act outside the fence.
     "(deny appleevent-send)",
+    ...(readOnly ? ["(deny network*)", "(deny process-info* (target others))"] : []),
     // Signals only within this command's own sandbox: SIGUSR1 opens an unfenced Node process's debugger (its runner,
     // the hosts, PI WEB), which would run any code outside the fence.
     "(deny signal)",
@@ -189,21 +214,22 @@ function profile({ write, read, reopen = [], locked = [], history = [], hidden, 
 const sandboxArgs = (rules, argv) => [...profile(rules), "--", ...argv];
 
 /**
- * Prove sandbox-exec fences writes before trusting it: once per binary build (a macOS update replaces it), a write
- * inside a grant must work and one beside it must fail. The receipt lives where commands cannot write.
+ * Prove the read and write rules on fixtures before trusting sandbox-exec: once per binary build. The receipt lives where commands cannot write.
  */
 function proven(bin, env, home) {
   const state = join(real(home), ".pi-workbench", "sandbox");
   const { size, mtimeMs } = statSync(real(bin));
-  const receipt = join(state, `canary-${createHash("sha256").update(`${real(bin)}:${size}:${mtimeMs}`).digest("hex").slice(0, 16)}.json`);
+  const receipt = join(state, `canary-rw-${createHash("sha256").update(`${real(bin)}:${size}:${mtimeMs}`).digest("hex").slice(0, 16)}.json`);
   try { if (JSON.parse(readFileSync(receipt, "utf8")).ok === true) return; } catch { /* not proven yet */ }
   const dir = join(state, `canary-${process.pid}`);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "in"), { recursive: true, mode: 0o700 });
   mkdirSync(join(dir, "out"), { mode: 0o700 });
   try {
-    const run = spawnSync(bin, sandboxArgs({ write: [join(dir, "in")], read: [], hidden: [] }, ["/bin/sh", "-c", 'touch "$1/in/ok"; touch "$1/out/escaped"', "sh", dir]), { env, encoding: "utf8", timeout: 20_000 });
-    const ok = run.error === undefined && existsSync(join(dir, "in", "ok")) && !existsSync(join(dir, "out", "escaped"));
+    const fixture = join(dir, "out", "hidden");
+    writeFileSync(fixture, "probe");
+    const run = spawnSync(bin, sandboxArgs({ write: [join(dir, "in")], read: [], hidden: [fixture] }, ["/bin/sh", "-c", '/usr/bin/touch "$1/in/ok" && ! /usr/bin/touch "$1/out/escaped" && ! /bin/cat "$1/out/hidden"', "sh", dir]), { env, encoding: "utf8", timeout: 20_000 });
+    const ok = run.status === 0 && existsSync(join(dir, "in", "ok")) && !existsSync(join(dir, "out", "escaped"));
     if (!ok) throw new Error(`${bin} failed the write-fence check${run.error ? `: ${run.error.message}` : ""}`);
     writeFileSync(receipt, JSON.stringify({ ok, bin: real(bin), at: Date.now() }), { mode: 0o600 });
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -300,6 +326,14 @@ export function alreadyFenced() {
   } catch (error) { return error.code === "EPERM"; }
 }
 
+// An inherited pre-upgrade write fence is not a read fence. Check only metadata, never the credential's contents.
+export function inheritedReadFence() {
+  if (!alreadyFenced()) return false;
+  try { statSync(join(userInfo().homedir, AUTH)); }
+  catch (error) { if (error.code === "EPERM") return true; }
+  throw new Error("Cannot verify the inherited read fence; restart outside the old sandbox");
+}
+
 /** The grants of a job of chat `sessionId` started in `cwd` with `env` (its PI_TMP), and the owners of its worktrees. */
 async function jobGrants({ cwd: at, sessionId }, env) {
   const home = env.HOME ?? homedir();
@@ -389,6 +423,12 @@ function sandboxBin(env, home, what) {
   return bin;
 }
 
+/** Run native readers (including recursive searches) under the read rules at every open, not a path precheck. */
+export function readLaunch(argv, env) {
+  const home = env.HOME ?? homedir();
+  return { file: sandboxBin(env, home, "nothing was read"), args: sandboxArgs({ readOnly: true, write: [], read: [], hidden: hiddenPaths(home) }, argv) };
+}
+
 /**
  * Writes `content` to the absolute `path` of a write or edit tool of chat `sessionId` (in `cwd`, tool environment
  * `env`), making its parent folders, in a fixed helper under the profile its commands get, with git's objects folders
@@ -447,7 +487,7 @@ export async function confine(job, env = process.env, { ownSocket } = {}) {
   const argv = [job.shell, ...job.args, job.command];
   // Full access: the owner approved it for this Chat in a dialog only he can answer (durable-pilot /full-access); the
   // host writes it into the job record, which no command can write.
-  if (!fenced() || job.fullAccess === true || alreadyFenced()) return { file: argv[0], args: argv.slice(1), env };
+  if (!fenced() || job.fullAccess === true || inheritedReadFence()) return { file: argv[0], args: argv.slice(1), env };
   const home = env.HOME ?? homedir();
   const bin = sandboxBin(env, home, "the command was not run");
   const { owners, rules } = await jobGrants(job, env);

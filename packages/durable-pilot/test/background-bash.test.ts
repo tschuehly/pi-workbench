@@ -10,9 +10,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { syncBuiltinESMExports } from "node:module";
 import { userInfo } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { AgentDoc } from "@earendil-works/pi-durable";
-import { alreadyFenced } from "../../../extensions/background-bash/sandbox.mjs";
+import { alreadyFenced, readLaunch } from "../../../extensions/background-bash/sandbox.mjs";
 import { BackgroundBash, BashJobsDoc } from "../src/background-bash.ts";
 import { ChatHost, live, logged, textOf, waitFor } from "./chat-proc.ts";
 import { cleanup, scratch } from "./runner.ts";
@@ -720,3 +721,39 @@ test("write and edit tools meet the write fence of the Chat's commands: its chec
 	}
 });
 
+test("fenced Chat reads project files and session.sqlite, not private folders or the login through a link", { skip: process.platform !== "darwin" || alreadyFenced() }, async () => {
+	const { cwd } = family("read-fence");
+	const home = join(ROOT, "read-home");
+	const auth = join(home, ".pi/agent/auth.json");
+	const store = join(home, ".pi-web-durable/durable/example");
+	const db = join(store, "session.sqlite");
+	for (const dir of [".pi/agent", ".pi-web-durable/durable/example", "Documents"]) mkdirSync(join(home, dir), { recursive: true });
+	writeFileSync(auth, "{}");
+	writeFileSync(join(home, "Documents/note"), "private fixture");
+	writeFileSync(join(cwd, "project.txt"), "project fixture");
+	symlinkSync(auth, join(cwd, "alias"));
+	// A search starting in an allowed parent must not return a denied descendant.
+	writeFileSync(join(home, "public-note"), "public fixture");
+	const env = { HOME: home, PATH: process.env.PATH };
+	const { file, args } = readLaunch([process.execPath, fileURLToPath(new URL("../src/read-tool-main.ts", import.meta.url))], env);
+	for (const name of ["grep", "find", "ls"]) {
+		const input = JSON.stringify({ name, args: name === "ls" ? { path: join(home, "Documents") } : { pattern: name === "grep" ? "fixture" : "*note", path: home } });
+		const result = spawnSync(file, args, { cwd, env, input, encoding: "utf8", timeout: 20_000 });
+		if (name === "ls") assert.equal(result.status, 1, "cannot list Documents");
+		else if (result.status === 0) assert.match(result.stdout, /public-note/);
+		else assert.match(result.stderr, /not permitted|permission denied/i); // rg can report the refused traversal.
+		assert.doesNotMatch(result.stdout, /Documents\/note|private fixture/);
+	}
+	const host = new ChatHost(store, cwd, { env: { HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi/agent") } });
+	try {
+		await host.ready;
+		let n = 0;
+		for (const [path, allowed] of [["@~/.pi/agent/auth.json", false], ["~/Documents/note", false], ["alias", false], ["project.txt", true], [db, true]] as const) {
+			await host.call("prompt", { operationId: `read-${++n}`, text: call("read", { path, limit: 1 }) });
+			const end = await toolEnd(host, n);
+			assert.equal(end.isError, !allowed, path);
+			if (allowed) assert.match(String(end.text), path === db ? /SQLite format 3/ : /project fixture/);
+			await host.idle(n);
+		}
+	} finally { await host.close(); }
+});

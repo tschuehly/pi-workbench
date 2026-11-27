@@ -112,7 +112,12 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
     mkdirSync(join(home, dir), { recursive: true });
     writeFileSync(join(home, dir, "private.txt"), "private");
   }
-  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
+  const agent = join(home, ".pi", "agent");
+  mkdirSync(agent, { recursive: true });
+  const target = join(home, "synthetic-login");
+  writeFileSync(target, "{}");
+  symlinkSync(target, join(agent, "auth.json"));
+  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; for p in "$HOME/.pi/agent/auth.json" "$HOME/synthetic-login"; do cat "$p" >/dev/null 2>&1 && echo "READ login"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.doesNotMatch(out, /READ |LISTED /);
@@ -120,7 +125,7 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
 });
 
 test("inside a fence the runner starts commands under the outer fence instead of failing", { skip: process.platform !== "darwin" && "macOS only" }, () => {
-  const out = execFileSync("/usr/bin/sandbox-exec", ["-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
+  const out = execFileSync("/usr/bin/sandbox-exec", ["-D", `AUTH=${join(userInfo().homedir, ".pi/agent/auth.json")}`, "-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))(deny file-read* (literal (param "AUTH")))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
   assert.equal(out.trim(), "true /bin/bash");
   assert.equal(alreadyFenced(), false, "this test process itself is unfenced");
 });
@@ -556,4 +561,19 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "DENIED Library/pnpm/store", "AGENT_CACHES_OK", `runtime=${join(home, ".pi-workbench", "sandbox-runtime")} 700`, "RUNTIME_CHMOD_DENIED", "RUNTIME_MOVE_DENIED", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
+});
+
+test("the read policy includes the login's real target, fails closed on a broken link, and leaves the session store visible", () => {
+  const h = mkdtempSync(join(root, "read-policy-"));
+  const dir = join(h, ".pi", "agent");
+  mkdirSync(dir, { recursive: true });
+  const target = join(h, "fixture");
+  symlinkSync(target, join(dir, "auth.json"));
+  const policy = () => grants({ cwd: h, home: h }).hidden;
+  assert.throws(policy, { code: "ENOENT" });
+  writeFileSync(target, "{}");
+  const hidden = policy();
+  assert.ok(hidden.includes(realpathSync.native(target)));
+  assert.ok(hidden.includes(join(h, ".pi/agent/auth.json")));
+  assert.ok(!hidden.some((p) => join(h, ".pi-web-durable/durable/id/session.sqlite").startsWith(`${p}/`)));
 });

@@ -13,6 +13,7 @@ import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, createReadStream, existsSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { promisify } from "node:util";
 import { StringDecoder } from "node:string_decoder";
 import type { Context } from "@earendil-works/chord/context";
 import { bool, num, obj, opt, str } from "@earendil-works/pi-schema";
@@ -23,7 +24,7 @@ import { err, FileError, type FileErrorCode, ok, type Result } from "@earendil-w
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail, VANISHED } from "../../../extensions/background-bash/jobs.mjs";
-import { alreadyFenced, fenced, fencedMkdir, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
+import { alreadyFenced, inheritedReadFence, fenced, fencedMkdir, fencedWrite, readLaunch, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
 import { ChildDoc, DelegationDoc } from "./delegation.ts";
@@ -160,6 +161,7 @@ function refusal<T>(error: unknown, path: string): Result<T, FileError> {
  * undefined when they run unfenced (then done here). Both throw when the fence refuses.
  */
 type Fence = {
+	read: (path: string, signal: AbortSignal | undefined) => Promise<string | undefined>;
 	write: (path: string, content: string | Uint8Array, signal: AbortSignal | undefined) => Promise<boolean>;
 	tempDir: (prefix: string, signal: AbortSignal | undefined) => Promise<string | undefined>;
 };
@@ -182,6 +184,15 @@ class FencedEnv extends NodeExecutionEnv {
 		} catch (error) {
 			return refusal(error, prefix ?? "tmp-");
 		}
+	}
+
+	override async readTextFile(path: string, c: Context): Promise<Result<string, FileError>> {
+		const target = await this.absolutePath(path, c);
+		if (!target.ok) return target;
+		try {
+			const text = await this.#fence.read(target.value, c.abortSignal);
+			return text === undefined ? super.readTextFile(path, c) : ok(text);
+		} catch (error) { return refusal(error, target.value); }
 	}
 
 	override async writeFile(path: string, content: string | Uint8Array, c: Context): Promise<Result<void, FileError>> {
@@ -474,6 +485,12 @@ export class BackgroundBash {
 	env(options: { cwd: string; shellEnv: NodeJS.ProcessEnv }, conversationId: ConversationId): NodeExecutionEnv {
 		const at = (signal: AbortSignal | undefined) => ({ cwd: options.cwd, sessionId: this.#options.chatId, env: { ...process.env, ...options.shellEnv }, signal });
 		return new FencedEnv(options, {
+			// Edit and its preview also read content before computing the diff.
+			read: async (path, signal) => {
+				if (this.readerUnfenced(conversationId)) return undefined;
+				const launch = readLaunch(["/bin/cat", path], at(signal).env);
+				return (await promisify(execFile)(launch.file, launch.args, { env: {}, signal, maxBuffer: Infinity })).stdout;
+			},
 			write: async (path, content, signal) => {
 				if (this.#unfenced(conversationId)) return false;
 				await fencedWrite(path, content, at(signal));
@@ -493,6 +510,10 @@ export class BackgroundBash {
 	/** Where its commands run unfenced: no fence on this machine, the lead under /full-access, or a host already inside one. */
 	#unfenced(conversationId: ConversationId): boolean {
 		return !fenced() || (conversationId === this.#options.rootId() && this.#fullAccess) || alreadyFenced();
+	}
+
+	readerUnfenced(conversationId: ConversationId): boolean {
+		return !fenced() || (conversationId === this.#options.rootId() && this.#fullAccess) || inheritedReadFence();
 	}
 
 	async status(): Promise<Record<string, string>> {
