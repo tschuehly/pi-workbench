@@ -9,7 +9,8 @@ import { after, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
+import { grant, revoke } from "../../scripts/fence-grant.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grantRefusal, grants, ownedWorktrees, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -556,4 +557,61 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "DENIED Library/pnpm/store", "AGENT_CACHES_OK", `runtime=${join(home, ".pi-workbench", "sandbox-runtime")} 700`, "RUNTIME_CHMOD_DENIED", "RUNTIME_MOVE_DENIED", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
+});
+
+// Runs inside a fence too: it only computes the grants (the owner CLI's functions write the fake home's grant file).
+test("Workstream grants: a Chat started in the Workstream's scratch folder writes a granted checkout as its own, not before the grant or after revoke", async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "grant-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(app, { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  const scratchDir = join(fake, ".pi-workbench", "scratch", "ws-x");
+  const notes = join(fake, "notes");
+  mkdirSync(scratchDir, { recursive: true });
+  mkdirSync(notes);
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  const blocked = async (path, cwd = scratchDir) => /^Blocked/.test(await writeRefusal(path, { cwd, sessionId: "grant-test", env }) ?? "");
+  assert.ok(await blocked(join(app, "x")), "not before the grant");
+  assert.equal(grant(fake, "ws-x", app), app);
+  assert.equal(grant(fake, "ws-x", notes), notes);
+  assert.equal(await blocked(join(app, "src", "x")), false, "the granted checkout");
+  assert.equal(await blocked(join(app, ".git", "refs", "heads", "x")), false, "its git folder");
+  assert.equal(await blocked(join(notes, "x")), false, "a granted plain folder");
+  for (const path of [join(app, ".git", "hooks", "pre-commit"), join(app, ".git", "config"), join(app, ".git", "pi-creator.json"), join(app, "AGENTS.md"), join(notes, ".pi", "x")]) assert.ok(await blocked(path), path);
+  assert.ok(await blocked(join(app, "x"), join(fake, ".pi-workbench", "scratch", "ws-y")), "a Chat started in another Workstream's folder");
+  assert.ok(await blocked(join(app, "x"), fake), "a Chat started in home");
+  // A grant is the real folder the owner chose: one swapped for a link later grants nothing.
+  rmSync(notes, { recursive: true });
+  symlinkSync(join(fake, ".pi-web-durable"), notes);
+  mkdirSync(join(fake, ".pi-web-durable"));
+  assert.ok(await blocked(join(notes, "x")), "a link swapped in for a granted folder");
+  assert.ok(revoke(fake, "ws-x", app));
+  assert.ok(await blocked(join(app, "x")), "not after revoke");
+  // Refused at grant time and again when applied, whatever the grant file says.
+  for (const dir of [fake, join(fake, "IdeaProjects"), join(fake, ".pi"), join(fake, ".pi", "agent"), join(fake, ".pi-web-durable"), join(fake, ".pi-workbench"), join(fake, ".pi-workbench", "sandbox"), join(fake, ".pi-workbench", "sandbox-caches"), join(fake, ".pi-workbench", "tmp", "ws-x"), join(fake, ".pi-workbench", "scratch"), join(fake, ".pi-workbench", "workstreams"), "/etc"]) {
+    assert.ok(grantRefusal(dir, fake), dir);
+    assert.deepEqual(grants({ cwd: fake, home: fake, granted: [dir] }).write.filter((w) => !w.includes("sandbox-")), [], dir);
+  }
+  assert.equal(grantRefusal(join(fake, ".pi-workbench", "scratch", "ws-y"), fake), undefined, "another Workstream's scratch folder may be granted");
+  mkdirSync(join(fake, ".pi"));
+  assert.throws(() => grant(fake, "ws-x", join(fake, ".pi")), /refused/);
+  assert.throws(() => grant(fake, "../ws-x", app), /not a Workstream ID/);
+});
+
+test("Workstream grants: a fenced command commits in a granted checkout and cannot write the grant file", { skip }, async () => {
+  const lib = join(home, "IdeaProjects", "granted");
+  mkdirSync(lib);
+  git(lib, "init", "-q");
+  git(lib, "commit", "-q", "--allow-empty", "-m", "init");
+  const scratchDir = join(home, ".pi-workbench", "scratch", "ws-g");
+  mkdirSync(scratchDir, { recursive: true });
+  const attempt = `cd "${lib}" && ${commit} && echo COMMITTED; touch .git/hooks/x 2>/dev/null && echo HOOK_WRITTEN; mkdir -p "$HOME/.pi-workbench/sandbox/grants" 2>/dev/null; echo '{"paths":["${home}"]}' > "$HOME/.pi-workbench/sandbox/grants/ws-g.json" 2>/dev/null && echo GRANT_FORGED; true`;
+  const before = await run(attempt, { cwd: scratchDir });
+  assert.doesNotMatch(readFileSync(before.logPath, "utf8"), /COMMITTED|GRANT_FORGED/, "no grant yet");
+  grant(home, "ws-g", lib);
+  const job = await run(attempt, { cwd: scratchDir });
+  assert.equal(job.state, "complete", job.error);
+  assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["COMMITTED"]);
+  assert.match(git(lib, "log", "-1", "--format=%s"), /fenced/);
+  revoke(home, "ws-g", lib);
 });

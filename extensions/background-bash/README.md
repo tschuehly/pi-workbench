@@ -65,7 +65,8 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 
 - **Writable:** the chat's git checkout or linked worktree (its `hooks`, `config`, `info`, other worktrees' metadata,
   owner and creator records and `.git` link stay read-only), linked worktrees whose creation receipt
-  (`pi-creator.json`) names the chat (or, for a chat started in `scratch/<ws>`, that Workstream), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
+  (`pi-creator.json`) names the chat (or, for a chat started in `scratch/<ws>`, that Workstream), checkouts and folders
+  Thomas granted the Workstream whose `scratch/<ws>` the chat started in (Workstream grants below), the chat's Workstream scratch folder, `PI_TMP` (the command's `TMPDIR`
   is a short link to it, `~/.pi-workbench/t/<hash>`, so Unix sockets there stay under the 104-byte limit), and the agents' own caches. Never home, `~/IdeaProjects`, Pi's own state, the shared system temp
   folders (unfenced Pi loads compiled extensions from there) or Thomas's caches (`~/Library/Caches`, `~/.cache`,
   `~/.gradle`, `~/.m2`, `~/.npm`, `~/Library/pnpm`): unfenced tools load code from them, e.g. Python's `.pyc` files.
@@ -76,6 +77,15 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   makes and checks, where pnpm 12 keeps its store operation locks instead of the unwritable `/tmp`; fenced commands
   write its contents but cannot replace it or change its mode); a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
   downloads its other dependencies again.
+- **Workstream grants:** `node scripts/fence-grant.mjs <ws-id> <path>` (`--revoke <ws-id> <path>`, `--list [<ws-id>]`),
+  run unfenced by Thomas (Terminal or a Run button), stores the folder's real path in
+  `~/.pi-workbench/sandbox/grants/<ws-id>.json`, which no fence grants, so no agent (nor its `workstreams link`) can
+  grant itself a folder. A granted checkout gets a checkout's treatment (hooks, config and receipts read-only, history
+  rules); a plain folder is writable whole (its `AGENTS.md` and `.pi` read-only), git repos inside it included, so grant
+  checkouts one by one. Home, `~/IdeaProjects` itself, Pi's own state and `~/.pi-workbench` (except a `scratch/<ws>`
+  folder) are refused, and a granted path that later resolves elsewhere (a link swapped in) grants nothing.
+  `--backfill [--dry-run]` writes creation receipts for worktrees whose cleanup record names a Workstream but that were
+  made unfenced, from that record (its sessions and Workstreams).
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
   commits, branches and fetches work, `git gc` and repack fail inside the fence.

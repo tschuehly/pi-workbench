@@ -96,19 +96,47 @@ export function ownedWorktrees(home, owners) {
   return found;
 }
 
-/**
- * Paths a command may write (`write`), paths inside them that stay read-only (`read`), paths reopened inside those
- * (`reopen`), single files locked again inside those (`locked`) and paths it cannot read (`hidden`). A chat folder is
- * granted only as its git checkout or worktree, or as one Workstream scratch folder; never home, ~/IdeaProjects, the
- * scratch root or Pi's own state, so a chat started there runs read-only. `worktrees` adds the chat's owned worktrees.
- */
-export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }) {
-  home = real(home);
-  cwd = real(cwd);
+/** What no grant may ever be or lie in, for the real `home`. */
+function limits(home) {
   const pw = join(home, ".pi-workbench");
   const scratchRoot = join(pw, "scratch");
   const never = [join(home, ".pi"), join(home, ".pi-web-durable"), join(pw, "installed"), join(pw, "installed-durable"), join(pw, "workstreams"), join(pw, "background-bash"), join(pw, "sandbox")];
   const grantable = (dir) => inside(dir, home) && ![join(home, "IdeaProjects"), pw, scratchRoot, join(pw, "tmp")].includes(dir) && !never.some((n) => dir === n || inside(dir, n));
+  return { pw, scratchRoot, grantable };
+}
+
+/** Why the owner may not grant the real folder `dir` to a Workstream (fence-grant.mjs); undefined when he may. */
+export function grantRefusal(dir, home = homedir()) {
+  const { pw, scratchRoot, grantable } = limits(real(home));
+  if (typeof dir !== "string" || !isAbsolute(dir) || !grantable(dir)) return `${dir} is home, ~/IdeaProjects itself, Pi's own state or outside home`;
+  if (inside(dir, pw) && !inside(dir, scratchRoot)) return `${dir} is Pi Workbench state; only a scratch/<ws> folder there may be granted`;
+  return undefined;
+}
+
+// Owner grants live where no fence grants (`never`), written only by scripts/fence-grant.mjs run unfenced, so no
+// agent (not even through the `workstreams` host operation) can grant itself a folder.
+export const grantsFile = (home, ws) => join(real(home), ".pi-workbench", "sandbox", "grants", `${ws}.json`);
+
+/** The folders the owner granted Workstream `ws`; none when unreadable or malformed. */
+export function workstreamGrants(home, ws) {
+  if (workstreamId(ws) === undefined) return [];
+  try {
+    const paths = JSON.parse(readFileSync(grantsFile(home, ws), "utf8")).paths;
+    return Array.isArray(paths) ? paths.filter((p) => typeof p === "string") : [];
+  } catch { return []; }
+}
+
+/**
+ * Paths a command may write (`write`), paths inside them that stay read-only (`read`), paths reopened inside those
+ * (`reopen`), single files locked again inside those (`locked`) and paths it cannot read (`hidden`). A chat folder is
+ * granted only as its git checkout or worktree, or as one Workstream scratch folder; never home, ~/IdeaProjects, the
+ * scratch root or Pi's own state, so a chat started there runs read-only. `worktrees` adds the chat's owned worktrees,
+ * `granted` the folders the owner granted its Workstream.
+ */
+export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [], granted = [] }) {
+  home = real(home);
+  cwd = real(cwd);
+  const { scratchRoot, grantable } = limits(home);
   const write = [];
   const read = [];
   const reopen = [];
@@ -134,6 +162,13 @@ export function grants({ cwd, home = homedir(), piTmp, scratch, worktrees = [] }
   for (const tree of worktrees) {
     const owned = git(tree);
     if (owned !== undefined && owned.top === real(tree) && grantable(owned.top) && !write.includes(owned.top)) checkout(owned);
+  }
+  // Kept only while still the real folder the owner granted: a link swapped in for it later grants nothing.
+  for (const dir of granted) {
+    if (real(dir) !== dir || grantRefusal(dir, home) !== undefined || write.includes(dir)) continue;
+    const owned = git(dir);
+    if (owned !== undefined && owned.top === dir) checkout(owned);
+    else { write.push(dir); read.push(...REPO_READ_ONLY.map((p) => join(dir, p))); }
   }
   if (typeof piTmp === "string" && piTmp !== "" && grantable(real(piTmp))) write.push(real(piTmp));
   // One Workstream's own folder, directly under scratch/, never a path an ID could lead elsewhere.
@@ -310,7 +345,8 @@ async function jobGrants({ cwd: at, sessionId }, env) {
   const cwd = real(at);
   const started = inside(cwd, scratchRoot) ? workstreamId(relative(scratchRoot, cwd).split(sep)[0]) : undefined;
   const owners = [sessionId, started].filter((id) => typeof id === "string" && id !== "");
-  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners) });
+  // Owner grants by the same rule: the started-in Workstream, never one the Chat linked itself to.
+  const rules = grants({ cwd: at, home, piTmp: env.PI_TMP, scratch: ws === undefined ? undefined : join(scratchRoot, ws), worktrees: ownedWorktrees(real(home), owners), granted: started === undefined ? [] : workstreamGrants(home, started) });
   return { home, owners, rules };
 }
 
