@@ -4,6 +4,7 @@
   "private": true,
   "license": "MIT",
   "description": "Pi-only workbench harness capabilities",
+  "engines": { "node": ">=24.13.0" },
   "keywords": [
     "pi-package"
   ],
