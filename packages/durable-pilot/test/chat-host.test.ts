@@ -1841,6 +1841,41 @@ test("request_attention persists across a kill, notifies once, and clears only b
 	await host.close();
 });
 
+test("an owner run result PI WEB delivers as a prompt (Terminal runs) leaves an open attention request open", async () => {
+	const { store, cwd } = family("attention-owner-run");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: 'call:request_attention {"reason":"Please review"}' });
+	await idle(host, 1);
+	const open = (await host.call<Status>("status")).attentionRequest;
+	assert.ok(open !== undefined);
+	// PI WEB durableChatService.ownerRun: a Terminal run's notice arrives as a follow-up prompt marked `machine`.
+	await host.call("prompt", { operationId: "owner-run:7d1c", text: "[Owner run result] The user confirmed and ran your pi-run proposal outside the write fence.", mode: "followUp", machine: true });
+	await idle(host, 2);
+	assert.equal((await host.call<Status>("status")).attentionRequest?.id, open.id, "a machine follow-up is not the owner answering");
+	// The operation ID is caller-chosen: an owner message under an `owner-run:` ID still answers it.
+	await host.call("prompt", { operationId: "owner-run:custom", text: "here" });
+	assert.equal((await host.call<Status>("status")).attentionRequest, undefined, "only the machine flag keeps it open");
+	await host.close();
+});
+
+test("a replayed prompt operation admits no new turn and leaves an open attention request open", async () => {
+	const { store, cwd } = family("attention-replay");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: "hello" });
+	await idle(host, 1);
+	await host.call("prompt", { operationId: "op-2", text: 'call:request_attention {"reason":"Please review"}' });
+	await idle(host, 2);
+	const open = (await host.call<Status>("status")).attentionRequest;
+	assert.ok(open !== undefined);
+	// PI WEB retries an operation across a daemon restart, or replays a spawned Chat's assignment, with the same ID and text.
+	const replay = await host.call<{ fresh: boolean }>("prompt", { operationId: "op-1", text: "hello" });
+	assert.equal(replay.fresh, false);
+	assert.equal((await host.call<Status>("status")).attentionRequest?.id, open.id, "a replay is not a new message from the owner");
+	await host.close();
+});
+
 test("model switching is per Chat, persisted, and applies to the next request", async () => {
 	const { store, cwd } = family("model");
 	let host = new ChatHost(store, cwd);

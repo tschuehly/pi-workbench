@@ -220,7 +220,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 	status: () => session.status(),
 	info: () => session.info(),
 	prompt: (params) => {
-		const { operationId, text: body, mode } = params;
+		const { operationId, text: body, mode, machine } = params;
 		if (typeof operationId !== "string" || operationId === "" || typeof body !== "string") throw new Error("prompt needs operationId and text");
 		if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
 		const { attachments } = params;
@@ -229,6 +229,7 @@ const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
 			operationId, text: body, ...(mode === undefined ? {} : { mode }),
 			...(images === undefined ? {} : { images }),
 			...(Array.isArray(attachments) ? { attachments: attachments as Attachment[] } : {}),
+			...(machine === true ? { machine: true } : {}),
 		});
 	},
 	mode: (params) => session.mode(typeof params.args === "string" ? params.args : ""),

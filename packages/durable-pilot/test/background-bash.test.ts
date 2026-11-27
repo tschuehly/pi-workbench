@@ -106,6 +106,20 @@ test("an owner run is an unfenced background job of the lead: launched once per 
 	await host.close();
 });
 
+test("an open attention request survives an owner run's completion turn: a machine follow-up does not clear it", async () => {
+	const { store, cwd } = family("owner-run-attention");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: call("request_attention", { reason: "Please review" }) });
+	await host.idle(1);
+	const open = (await host.call<{ attentionRequest?: { id: string } }>("status")).attentionRequest;
+	assert.ok(open !== undefined, "the request is open");
+	await host.call("ownerRun", { operationId: "owner-run:attention", command: "echo done", cwd });
+	await host.idle(2);
+	assert.deepEqual((await host.call<{ attentionRequest?: { id: string } }>("status")).attentionRequest?.id, open.id, "a Run result leaves it open");
+	await host.close();
+});
+
 test("an owner run masks a private key that never ends, and once its job record is pruned the same operation is refused, not run again", async () => {
 	const { store, cwd } = family("owner-run-pruned");
 	const host = new ChatHost(store, cwd);

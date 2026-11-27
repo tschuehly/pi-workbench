@@ -1042,7 +1042,7 @@ export class ChatSession {
 	 * Admit one input under its stable operation ID; resolves once committed. Sending resumes a paused restore, answers
 	 * an attention request, and carries a pending Working Mode block before the user's text (one input, one turn).
 	 */
-	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp"; images?: ImageContent[]; attachments?: Attachment[] }): Promise<{ submissionId: SubmissionId; fresh: boolean }> {
+	async prompt(params: { operationId: string; text: string; mode?: "steer" | "followUp"; images?: ImageContent[]; attachments?: Attachment[]; machine?: boolean }): Promise<{ submissionId: SubmissionId; fresh: boolean }> {
 		await this.#resume();
 		const { root } = this.#host;
 		const existing = await root.commit((tx) => tx.submissionByRequest(root.id, params.operationId), context);
@@ -1078,7 +1078,8 @@ export class ChatSession {
 		// Admitted: a new turn follows, so this idle stretch is over (a refused input or a replayed operation leaves the timer armed).
 		if (existing === undefined) this.#cancelIdle();
 		if (existing === undefined) this.#record("prompt", { entryId: null, prompt: null, submissionId: String(submissionId) });
-		if (this.#chat !== undefined && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
+		// Only a newly admitted owner input answers an attention request: not a replayed operation, nor a delivery PI WEB marks `machine` (a Terminal-run notice).
+		if (fresh && params.machine !== true && (await acknowledgeAttention(root, undefined))) await this.#publishStatus();
 		else if (block !== undefined) await this.#publishStatus();
 		// `fresh`: this call admitted a new input (PI WEB restarts the reply chain only then), not a replayed operation.
 		return { submissionId, fresh: existing === undefined };
