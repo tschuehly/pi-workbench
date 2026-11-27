@@ -23,6 +23,7 @@ import { err, FileError, type FileErrorCode, ok, type Result } from "@earendil-w
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { defineDoc } from "./store-schema.ts";
 import { cancelJob as cancelRecord, cleanOutput, completionContent, defaultRoot, describeJob, launchJob, MAX_TAIL, previewJob, readJob as readRecord, readTail, VANISHED } from "../../../extensions/background-bash/jobs.mjs";
+import { refuseUnsafe } from "../../../extensions/background-bash/safety-net.mjs";
 import { alreadyFenced, fenced, fencedMkdir, fencedWrite, writeRefusal as fenceRefusal } from "../../../extensions/background-bash/sandbox.mjs";
 import { toolEnv, warningTool } from "./extensions.ts";
 import { context } from "./host.ts";
@@ -262,6 +263,7 @@ export class BackgroundBash {
 					if (args.timeout !== undefined && (!Number.isFinite(args.timeout) || args.timeout <= 0 || args.timeout * 1000 > 2_147_483_647)) throw new Error("Invalid timeout in seconds");
 					if (lead && args.description === undefined) throw new Error("A short description is required");
 					if (!existsSync(cwd)) throw new Error(`Working directory does not exist: ${cwd}`);
+					refuseUnsafe(args.command, cwd);
 					const owned = Object.keys((await api.snapshot(BashJobsDoc, api.conversationId, c))?.jobs ?? {});
 					if (owned.filter((other) => !settled(readJob(this.#root, other))).length >= MAX_ACTIVE)
 						throw new Error("Too many background bash jobs; wait or cancel one before starting another");

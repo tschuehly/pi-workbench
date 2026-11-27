@@ -207,6 +207,24 @@ test("P071 foreground waits for the output inline; a failing exit is an error re
 	await host.close();
 });
 
+test("cc-safety-net strict refuses the 23 Nov command before launch; an allowed delete runs", async () => {
+	const { store, cwd } = family("safety-net");
+	mkdirSync(join(cwd, "build"));
+	const host = new ChatHost(store, cwd, { env: { CC_SAFETY_NET_LEVEL: "strict" } });
+	await host.ready;
+	await host.call("prompt", { operationId: "op-1", text: call("bash", { description: "Incident command", command: "echo x >> launches.log; rm -rf $PI_SAFETY_NET_UNSET/*", foreground: true }) });
+	const refused = await toolEnd(host);
+	assert.equal(refused.isError, true);
+	assert.match(String(refused.text), /Blocked by cc-safety-net \(rm\.recursive-force-dynamic-target\)/);
+	assert.equal(launches(cwd), 0, "never started");
+	await host.call("prompt", { operationId: "op-2", text: call("bash", { description: "Delete build", command: "rm -rf ./build && echo gone", foreground: true }) });
+	const ok = await toolEnd(host, 2);
+	assert.equal(ok.isError, false);
+	assert.equal(String(ok.text), "gone\n");
+	assert.equal(existsSync(join(cwd, "build")), false);
+	await host.close();
+});
+
 test("P073 one foreground bash is one Activity shell: its job names the running call, so PI WEB shows it once; nothing once it ends", async () => {
 	const { store, cwd } = family("activity");
 	const host = new ChatHost(store, cwd);
