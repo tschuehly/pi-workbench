@@ -172,11 +172,6 @@ const text = (params: Record<string, unknown>, name: string): string => {
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const methods: Record<string, (params: Record<string, unknown>) => unknown> = {
-	transcript: (params) => {
-		const { before, limit } = params;
-		for (const value of [before, limit]) if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error("before and limit must be non-negative integers");
-		return session.transcript(before === undefined && limit === undefined ? undefined : { ...(before === undefined ? {} : { before: before as number }), ...(limit === undefined ? {} : { limit: limit as number }) });
-	},
 	status: () => session.status(),
 	info: () => session.info(),
 	prompt: (params) => {
@@ -299,6 +294,14 @@ const EXCLUSIVE = new Set(["prompt", "resume", "mode", "closeAsk", "setModel", "
 /** One request; the reply goes back the way it came (a socket request to the connection that sent it). */
 async function handle(message: Request, reply: (message: unknown) => void): Promise<void> {
 	try {
+		if (message.method === "transcript") {
+			const { before, limit } = message.params ?? {};
+			for (const value of [before, limit]) if (value !== undefined && !(Number.isInteger(value) && (value as number) >= 0)) throw new Error("before and limit must be non-negative integers");
+			const page = before === undefined && limit === undefined ? undefined : { before: before as number | undefined, limit: limit as number | undefined };
+			// No yield between reading messages/partial and sending: the daemon stamps the watermark on receipt.
+			reply({ id: message.id, result: session.transcript(await session.status(), page) });
+			return;
+		}
 		const method = methods[message.method];
 		if (method === undefined) throw new Error(`Unknown method ${message.method}`);
 		const run = () => Promise.resolve(method(message.params ?? {}));

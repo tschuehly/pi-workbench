@@ -20,6 +20,7 @@ import {
 	type Tx,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
+import { pageMessagesAtSafeBoundary as pageTranscript, type MessagePageRequest } from "./message-paging.ts";
 import type { ChatHost } from "./chat.ts";
 import { applyModel, DEFAULT_COMPACTION, parseModel } from "./chat.ts";
 import { CEILING_CUSTOM_TYPE, CEILING_ENTRY, CHECKPOINT_CUSTOM_TYPE, CHECKPOINT_ENTRY, type CheckpointData, CheckpointDoc } from "./checkpoint.ts";
@@ -167,7 +168,8 @@ export type UnresolvedEffect = { id: string; toolName: string; arguments: string
 export type Resolution = "done" | "not-done" | "retry";
 
 /** A page of `transcript`: the messages before index `before` (default the end), PI WEB's `pageMessagesAtSafeBoundary` cursor. */
-export type TranscriptPage = { before?: number; limit?: number };
+export type TranscriptPage = MessagePageRequest;
+export { pageTranscript };
 /**
  * A paged read adds the page's `start` and the whole transcript's `total`, and `usage`: every assistant turn's usage
  * fields and each context reset, so PI WEB re-derives cache-miss notices without the whole history.
@@ -217,41 +219,6 @@ export async function storedMessages(host: Pick<Host, "harness" | "root">): Prom
 	await observation.detach();
 	const view = observation.value;
 	return (await history(host.root, view.entries.at(-1)?.id ?? view.before ?? 0)).flatMap((entry) => browserMessages(entry));
-}
-
-/**
- * PI WEB's `pageMessagesAtSafeBoundary` (src/server/sessions/messagePaging.ts), kept identical (test/transcript-paging.fixtures.json):
- * a hard limit (default 20, at most 500) ending before `before`; the start moves forward past leading tool results (and
- * notices before them) so none shows without its call, and a page of only those moves back to their call message, across
- * notices between the call and its results, exceeding the limit just to reach it. The page also starts at or before the first
- * call of the running turn (after the last user message) with no result after it, exceeding the limit, so a result that
- * arrives live always lands on the newest page beside its call.
- */
-export function pageTranscript<T>(all: T[], page: TranscriptPage): { messages: T[]; start: number; total: number } {
-	const total = all.length;
-	const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
-	const isResult = (index: number) => (all[index] as { role?: unknown } | null)?.role === "toolResult";
-	const isNotice = (index: number) => (all[index] as { role?: unknown } | null)?.role === "custom";
-	const before = clamp(page.before ?? total, 0, total);
-	const orphan = (index: number) => { while (index < before && isNotice(index)) index += 1; return index < before && isResult(index); };
-	const requested = Math.max(0, before - clamp(page.limit ?? 20, 1, 500));
-	let start = requested;
-	while (start < before && orphan(start)) start += 1;
-	if (start === before) {
-		start = requested;
-		while (start > 0 && (isResult(start - 1) || isNotice(start - 1))) start -= 1;
-		start = Math.max(0, start - 1);
-	}
-	let turn = total;
-	while (turn > 0 && (all[turn - 1] as { role?: unknown } | null)?.role !== "user") turn -= 1;
-	const results = new Set(all.slice(turn).map((message) => (message as { role?: unknown; toolCallId?: unknown } | null)?.role === "toolResult" ? (message as { toolCallId?: unknown }).toolCallId : undefined));
-	const waits = (message: unknown) => {
-		const { role, content } = (message ?? {}) as { role?: unknown; content?: unknown };
-		return role === "assistant" && Array.isArray(content)
-			&& content.some((part: { type?: unknown; id?: unknown } | null) => part?.type === "toolCall" && typeof part.id === "string" && !results.has(part.id));
-	};
-	for (let index = turn; index < start; index += 1) if (waits(all[index])) { start = index; break; }
-	return { messages: all.slice(start, before), start, total };
 }
 
 /** What PI WEB's cache-miss scan reads (`cacheScanEntries`): assistant usage fields and context resets. */
@@ -744,13 +711,12 @@ export class ChatSession {
 	}
 
 	/** The whole transcript, or with `page` only that page (`pageTranscript`). */
-	async transcript(page?: TranscriptPage): Promise<Transcript> {
-		// Captured before the await, so the page and partial match the events emitted so far.
+	transcript(status: ChatStatus, page?: TranscriptPage): Transcript {
 		// shortcut: flattens every entry in memory (the total and the usage scan need all of them); only the page crosses the socket. Walk #entries from the end with a cached count if reads get slow.
 		const all = this.messages();
 		const partial = this.partial();
-		if (page === undefined) return { messages: all, partial, status: await this.status() };
-		return { ...pageTranscript(all, page), usage: all.flatMap(usageOnly), partial, status: await this.status() };
+		if (page === undefined) return { messages: all, partial, status };
+		return { ...pageTranscript(all, page), usage: all.flatMap(usageOnly), partial, status };
 	}
 
 	async status(): Promise<ChatStatus> {

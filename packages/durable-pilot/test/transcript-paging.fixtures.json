@@ -904,7 +904,7 @@
   "end": 6
  },
  {
-  "name": "a call of an earlier turn that never got a result does not grow the page",
+  "name": "an aborted partial cannot pin the page, even without another prompt",
   "messages": [
    {
     "role": "user",
@@ -918,11 +918,12 @@
       "id": "c1",
       "name": "read"
      }
-    ]
+    ],
+    "stopReason": "aborted"
    },
    {
-    "role": "user",
-    "content": "b"
+    "role": "custom",
+    "content": "notice"
    },
    {
     "role": "assistant",
@@ -977,5 +978,45 @@
   },
   "start": 2,
   "end": 3
+ },
+ {
+  "name": "an earlier result cannot answer a reused ID across a mode send notice and a user message",
+  "messages": [
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "again"
+     }
+    ]
+   },
+   {
+    "role": "toolResult",
+    "toolCallId": "again"
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "toolCall",
+      "id": "again"
+     }
+    ]
+   },
+   {
+    "role": "custom",
+    "content": "mode"
+   },
+   {
+    "role": "user",
+    "content": "mode notice"
+   }
+  ],
+  "page": {
+   "limit": 1
+  },
+  "start": 2,
+  "end": 5
  }
 ]

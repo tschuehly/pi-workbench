@@ -542,9 +542,19 @@ test("AFK battery alarm: once AFK applies and a turn runs on battery, the alarm 
 test("pageTranscript agrees with PI WEB's pageMessagesAtSafeBoundary on the shared fixtures (copied from PI WEB's messagePaging.fixtures.json)", () => {
 	const fixtures = JSON.parse(readFileSync(new URL("./transcript-paging.fixtures.json", import.meta.url), "utf8")) as { name: string; messages: unknown[]; page: { before?: number; limit?: number } | null; start: number; end: number }[];
 	for (const { name, messages, page, start, end } of fixtures) {
-		// No page means the whole transcript, which the host sends without paging.
-		if (page === null) continue;
-		assert.deepEqual(pageTranscript(messages, page), { start, total: messages.length, messages: messages.slice(start, end) }, name);
+		assert.deepEqual(pageTranscript(messages, page ?? undefined), { start, total: messages.length, messages: messages.slice(start, end) }, name);
+	}
+});
+
+// Both projects also run the fixture expectations independently when only one checkout is available.
+const peer = process.env.PI_WEB_REPO;
+test("the host and PI WEB fallback return identical pages for every shared fixture and cursor", { skip: !peer }, async () => {
+	const { pageMessagesAtSafeBoundary } = await import(join(peer!, "src/server/sessions/messagePaging.ts")) as typeof import("../src/message-paging.ts");
+	const fixtures = JSON.parse(readFileSync(new URL("./transcript-paging.fixtures.json", import.meta.url), "utf8")) as { name: string; messages: unknown[] }[];
+	for (const { name, messages } of fixtures) {
+		for (let before = 0; before <= messages.length; before++) for (const page of [{ before }, { before, limit: 1 }, {}, undefined]) {
+			assert.deepEqual(pageTranscript(messages, page), pageMessagesAtSafeBoundary(messages, page), name);
+		}
 	}
 });
 
@@ -600,14 +610,14 @@ async function quietChat(label: string) {
 test("a paged transcript holds only its page, within the limit; chained earlier pages cover it exactly once; the partial matches a whole read", async () => {
 	const { session, settled } = await quietChat("paging");
 	type Page = { messages: { role: string; entryId?: string; usage?: unknown; content?: unknown }[]; start: number; total: number; usage: { entryId?: string; usage?: unknown; content?: unknown }[]; partial: unknown };
-	const read = (page?: { before?: number; limit?: number }) => session.transcript(page) as Promise<Page>;
+	const read = async (page?: { before?: number; limit?: number }) => session.transcript(await session.status(), page) as Page;
 	const bash = `call:bash ${JSON.stringify({ command: "echo hi", description: "Echo", foreground: true })}`;
 	try {
 		for (let turn = 1; turn <= 6; turn++) {
 			await session.prompt({ operationId: `op-${String(turn)}`, text: turn % 2 === 0 ? bash : `turn ${String(turn)}` });
 			await settled(turn);
 		}
-		const whole = (await session.transcript()).messages as Page["messages"];
+		const whole = (await read()).messages as Page["messages"];
 		const last = await read({ limit: 3 });
 		assert.equal(last.total, whole.length);
 		assert.deepEqual(last.messages, whole.slice(-3), "a hard limit, not back to the turn's user message");
@@ -626,8 +636,9 @@ test("a paged transcript holds only its page, within the limit; chained earlier 
 		assert.ok(last.usage.every((m) => m.content === undefined), "usage only, no content");
 		await session.prompt({ operationId: "op-7", text: "gen" });
 		while (session.partial() === null) await new Promise((resolve) => setTimeout(resolve, 5));
-		// Both capture synchronously before their await: the same moment.
-		const [paged, all] = await Promise.all([read({ limit: 2 }), session.transcript()]);
+		const status = await session.status();
+		const paged = session.transcript(status, { limit: 2 }) as Page;
+		const all = session.transcript(status);
 		assert.notEqual(paged.partial, null);
 		assert.deepEqual(paged.partial, all.partial);
 		assert.deepEqual(paged.messages, all.messages.slice(paged.start));
