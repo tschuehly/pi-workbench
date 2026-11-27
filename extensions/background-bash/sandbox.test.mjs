@@ -435,6 +435,7 @@ test("the Seatbelt profile denies host files, while Durable stores and logs rema
   assert.ok(!text.split("\n").find((line) => line.startsWith("(deny file-read*"))?.includes('(param "P2")'), "the Durable store/log root is not hidden");
   assert.ok(text.includes('(deny network-outbound (remote unix-socket (subpath (param "P2"))))'), text);
   assert.ok(text.indexOf("(deny process-info* (target others))") < text.indexOf("(allow process-info* (target same-sandbox))"), text);
+  assert.ok(text.includes('(deny sysctl-read (sysctl-name-prefix "kern.procargs"))'), text);
 });
 
 test("fenced commands cannot read host launch files, but can read Durable stores and logs; ports and process-info stay fenced", { skip }, async () => {
@@ -459,8 +460,9 @@ test("fenced commands cannot read host launch files, but can read Durable stores
       nc(`-w2 127.0.0.1 ${sessiond.address().port}`), nc(`-w2 localhost ${web.address().port}`),
       read("$HOME/.pi-web-durable/hosts/h.plist"),
       read("$HOME/.pi-web-durable/durable/chat/session.sqlite"), read("$HOME/.pi-web-durable/logs/host.log"),
-      `ps -o command= -p ${outsider.pid} 2>/dev/null | grep -q sleep && echo OUTSIDER_SEEN || echo OUTSIDER_HIDDEN`,
-      "sleep 5 & ps -o command= -p $! | grep -q sleep && echo CHILD_SEEN || echo CHILD_HIDDEN; kill $!",
+      // ps lists every process; what stays hidden is a command line (macOS ps shows only "(sleep)" without its arguments).
+      `ps -o args= -p ${outsider.pid} 2>/dev/null | grep -q "sleep 30" && echo OUTSIDER_SEEN || echo OUTSIDER_HIDDEN`,
+      "sleep 5 & ps -o pid= -p $! | grep -qw $! && echo CHILD_SEEN || echo CHILD_HIDDEN; kill $!",
     ].join("; "), { env: { PI_WEB_SESSIOND_PORT: `${sessiond.address().port}e0`, PORT: String(web.address().port), PI_WEB_PORT: undefined, PI_WEB_CONFIG: config } });
     assert.equal(job.state, "complete", job.error);
     assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "UNREADABLE", "READ", "READ", "OUTSIDER_HIDDEN", "CHILD_SEEN"]);

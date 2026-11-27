@@ -213,6 +213,9 @@ export function profile({ readOnly = false, write, read, reopen = [], locked = [
     // No inspecting processes outside this sandbox; its own children stay visible.
     "(deny process-info* (target others))",
     "(allow process-info* (target same-sandbox))",
+    // ps and pgrep read command lines and environments (a host's launch nonce) through sysctl kern.procargs*, which
+    // process-info does not cover and no rule can narrow to a target: every process's arguments stay unreadable.
+    '(deny sysctl-read (sysctl-name-prefix "kern.procargs"))',
   ];
   return [...params, "-p", rules.join("\n")];
 }
