@@ -15,7 +15,7 @@ import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
 import { submitWake } from "../src/cheap-wake.ts";
 import { AgentDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { context } from "../src/host.ts";
-import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
+import { QuestionsDoc, questionsState, WorkingModeDoc, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
 import { fakeAgentDir } from "./chat-proc.ts";
 import { cleanup, PACKAGE, scratch } from "./runner.ts";
@@ -339,13 +339,14 @@ test("crash row ownership: a second host on the same store refuses to open", asy
 type Status = Transcript["status"] & {
 	model?: { provider: string; id: string };
 	extensionStatuses?: Record<string, string>;
+	workingModeSample: number;
 	pendingAsks?: { askId: string; revision: string; questions: { id: string }[]; turnsSinceUpdate: number }[];
 	attentionRequest?: { id: string; reason: string };
 	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
 };
 type Logged = { label: string; workingMode?: number; sections?: string[]; images?: number };
 const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
-const mode = (status: Status) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
+const mode = (status: Pick<Status, "extensionStatuses">) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
 const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
 
 const ASK = {
@@ -418,6 +419,9 @@ test("Working Mode: a selection survives a restart, rides with the next prompt o
 	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done" });
 	assert.equal((await host.call<{ type: string }>("mode", { args: "attention sideways" })).type, "unsupported");
 	assert.equal(mode(await host.call<Status>("status")).selected.attention, "Focused");
+	// Each status numbers its Working Mode sample, so PI WEB orders a reply against the events by when the host read it.
+	const [first, second] = await Promise.all([host.call<Status>("status"), host.call<Status>("status")]);
+	assert.ok(first.workingModeSample < second.workingModeSample, "a later sample gets a higher number");
 	await host.close();
 
 	host = new ChatHost(store, cwd);
@@ -1246,6 +1250,43 @@ test("idle cache timer and cheap wake: an older Opus outside the routing roster 
 		await settled(2);
 		assert.deepEqual(turns(store).map((t) => t.model), ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-5-5"]);
 	} finally {
+		await session.close();
+	}
+});
+
+test("Working Mode: a held status cannot report the branch retired by navigation", async (t) => {
+	const { h, session, settled } = await quietChat("held-mode");
+	const release = Promise.withResolvers<void>();
+	try {
+		await session.prompt({ operationId: "first", text: "first" });
+		await settled(1);
+		const earlier = await session.tree();
+		assert.ok(earlier.type === "tree" && earlier.activeLeafId);
+		await session.mode("alignment align");
+		await session.prompt({ operationId: "second", text: "second" });
+		await settled(2);
+		const later = await session.tree();
+		assert.equal(later.type, "tree");
+		const started = Promise.withResolvers<void>();
+		const snapshot = h.harness.snapshot.bind(h.harness);
+		const held = t.mock.method(h.harness, "snapshot", async (...args: Parameters<typeof snapshot>) => {
+			const value = await snapshot(...args);
+			if (Object.is(args[0], WorkingModeDoc)) {
+				held.mock.restore();
+				started.resolve();
+				await release.promise;
+			}
+			return value;
+		});
+		const delayed = session.status();
+		await started.promise;
+		await session.navigate({ targetId: earlier.activeLeafId, expectedLeafId: later.activeLeafId });
+		const active = await session.status();
+		assert.equal(mode(active).selected.alignment, "Default");
+		release.resolve();
+		assert.equal(mode(await delayed).selected.alignment, "Default");
+	} finally {
+		release.resolve();
 		await session.close();
 	}
 });
