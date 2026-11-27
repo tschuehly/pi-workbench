@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 
@@ -38,7 +38,10 @@ function harness() {
   // print: a scheduled switch job runs while $HOME/job-running exists.
   shim("launchctl", `if [ "$CRASH_WEB" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.web) kill -KILL "$PPID";; esac; fi
   if [ "$CRASH_STOP" = 1 ] && [ "$1" = bootout ]; then case "$2" in */com.pi-web-durable.sessiond) kill -KILL "$PPID";; esac; fi
-  if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi; echo "$*" >> "$HOME/launchctl.log"`);
+  if [ "$1" = print ]; then [ -e "$HOME/job-running" ] || exit 1; echo "state = waiting"; exit 0; fi
+  # BOOT_EIO_ONCE: the first service bootstrap after a bootout fails as launchd does while it still holds the old job.
+  if [ -n "$BOOT_EIO_ONCE" ] && [ "$1" = bootstrap ] && [ ! -e "$HOME/boot-eio" ]; then case "$3" in *com.pi-web-durable.*) touch "$HOME/boot-eio"; echo "Bootstrap failed: 5: Input/output error" >&2; exit 5;; esac; fi
+  echo "$*" >> "$HOME/launchctl.log"`);
   shim("lsof", `echo "$*" >> "$HOME/lsof.log"; case "$*" in *tcp:*) echo "$FOREIGN_PID";; esac`);
   // FAIL_MV_CURRENT: the rename that replaces <store>/current fails (the one step that switches both products).
   shim("mv", `case "$*" in */installed-durable/current) [ -n "$FAIL_MV_CURRENT" ] && exit 1;; esac; exec /bin/mv "$@"`);
@@ -662,6 +665,20 @@ test("a rerun of an interrupted switch applies its own --force; no child inherit
   assert.equal(execute({ PI_PROMOTE_PS: `cat ${busy}` }).status, 0, readFileSync(join(job, "job.log"), "utf8"));
   assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
   assert.equal(h.log("fd9.log"), "");
+});
+
+test("a service bootstrap that fails once while launchd still holds the old job is retried, for switch and switch-web", () => {
+  const h = harness();
+  assert.equal(h.switchDurable(wbRev(1), pwRev(1)).status, 0);
+  const promoted = h.switchDurable(wbRev(2), pwRev(2), { BOOT_EIO_ONCE: "1" });
+  assert.equal(promoted.status, 0, promoted.log);
+  assert.ok(existsSync(join(h.home, "boot-eio")), "the failure was injected");
+  assert.doesNotMatch(promoted.log, /FAILED/);
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(2))}\n`);
+  rmSync(join(h.home, "boot-eio"));
+  const web = h.run(["switch-web", pwRev(3), "--from", wbRev(2), pwRev(2)], { BOOT_EIO_ONCE: "1" });
+  assert.equal(web.status, 0, web.stderr);
+  assert.equal(h.run(["current"]).stdout, `${short(wbRev(2))} ${short(pwRev(3))}\n`);
 });
 
 test("an interrupted web-only restart resumes without restarting the session daemon", () => {
