@@ -4,13 +4,16 @@
 // the host emitted after the relevant commit; no timing sleeps.
 import assert from "node:assert/strict";
 import { type ChildProcess, execFileSync, fork } from "node:child_process";
-import { closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, rmSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { readLog } from "../src/faux.ts";
 import { openChatHost } from "../src/chat.ts";
 import { ChatSession, piWebChatTitle } from "../src/chat-session.ts";
+import { IDLE_COMPACTION_ENTRY } from "../src/idle-compact.ts";
+import { submitWake } from "../src/cheap-wake.ts";
+import { AgentDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { context } from "../src/host.ts";
 import { QuestionsDoc, questionsState, workingModeSnapshot } from "../src/workbench.ts";
 import { AFK_CLOSE_PROMPT, BACK_PROMPT } from "../../../extensions/working-mode/rules.mts";
@@ -27,6 +30,8 @@ process.env.PI_TELEMETRY_DIR = TELEMETRY;
 // Hermetic: no storage-guard notice from this machine's real free space, and PI_TMP folders in scratch.
 process.env.PI_STORAGE_GUARD_FREE_GB = "1000";
 process.env.PI_TMP_ROOT = scratch("chat-pi-tmp");
+// And a scratch Workstream store: no host reads the owner's (the idle compaction looks up a Chat's Workstream).
+process.env.PI_WORKBENCH_WORKSTREAM_DIR = scratch("chat-workstreams");
 // And a Pi agent dir with fake stored logins, so hosts never read or lock the owner's auth.json.
 process.env.PI_CODING_AGENT_DIR = fakeAgentDir("chat-agent");
 
@@ -163,7 +168,7 @@ test("a turn reaches PI WEB as session events and a transcript with entry IDs", 
 	const host = new ChatHost(store, cwd);
 	const ready = await host.ready;
 	assert.equal(ready.protocol, 2);
-	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview"], "the gated PI WEB operations this host supports");
+	assert.deepEqual(ready.capabilities, ["queue.edit", "queue.promote", "attachments", "thinking", "shell", "compact", "compact-and-continue", "tool-groups", "tree", "liveReview", "viewed", "ask-images", "owner-run"], "the gated PI WEB operations this host supports");
 	await host.call("prompt", { operationId: "op-1", text: 'call:bash {"command":"cat notes.txt && echo written > out.txt","description":"Read and write","foreground":true}' });
 	await host.until((e) => e.type === "agent.end", "the run to end");
 	const types = host.events.map((e) => e.type);
@@ -338,7 +343,7 @@ type Status = Transcript["status"] & {
 	attentionRequest?: { id: string; reason: string };
 	unresolvedEffects?: { id: string; toolName: string; arguments: string }[];
 };
-type Logged = { label: string; workingMode?: number; sections?: string[] };
+type Logged = { label: string; workingMode?: number; sections?: string[]; images?: number };
 const logged = (store: string) => readLog<Logged>(join(store, "requests.log"));
 const mode = (status: Status) => JSON.parse(status.extensionStatuses?.["working-mode"] ?? "null") as { phase: string; selected: Record<string, string>; applied: Record<string, string> | null; aligned: boolean };
 const idle = (host: ChatHost, count: number) => host.until(() => host.events.filter((e) => e.type === "agent.end").length >= count, `${count} runs`);
@@ -410,7 +415,7 @@ test("Working Mode: a selection survives a restart, rides with the next prompt o
 	const { store, cwd } = family("mode");
 	let host = new ChatHost(store, cwd);
 	await host.ready;
-	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done", message: "Working Mode applies with the next prompt." });
+	assert.deepEqual(await host.call("mode", { args: "attention focused" }), { type: "done" });
 	assert.equal((await host.call<{ type: string }>("mode", { args: "attention sideways" })).type, "unsupported");
 	assert.equal(mode(await host.call<Status>("status")).selected.attention, "Focused");
 	await host.close();
@@ -557,6 +562,694 @@ async function quietChat(label: string) {
 	return { h, store, session, runs, settled };
 }
 
+/**
+ * An in-process scripted Chat on an Anthropic model for the idle cache timer, with an injected delay instead of the
+ * model's cache TTL and an injectable wall clock. The summary model (Sonnet) answers through the same script.
+ */
+const OPUS = { provider: "anthropic", modelId: "claude-opus-5-5" };
+async function idleChat(store: string, cwd: string, delay: () => number, options: { now?: () => number; notes?: string; keepRecentTokens?: number | null } = {}) {
+	const h = await openChatHost({ dir: store, cwd, model: `${OPUS.provider}/${OPUS.modelId}`, chatId: "chat-idle-timer", scriptedProviders: true });
+	const events: UiEvent[] = [];
+	let wake = () => {};
+	// The 80k-token threshold stays real: the faux model counts a request's chars / 4.
+	const session = new ChatSession(h, (event) => (events.push(event), wake()), {
+		chatId: "chat-idle-timer", power: { onBattery: async () => false, alarm: () => {}, everyMs: 60_000 }, idleDelayMs: () => delay(),
+		...(options.now === undefined ? {} : { now: options.now }), ...(options.notes === undefined ? {} : { idleNotes: options.notes }),
+	});
+	const until = async (done: () => boolean | Promise<boolean>, what: string, ms = 20_000) => {
+		const deadline = Date.now() + ms;
+		while (!(await done())) {
+			assert.ok(Date.now() < deadline, `no ${what} within ${String(ms / 1000)} s`);
+			await new Promise<void>((resolve) => ((wake = resolve), setTimeout(resolve, 50)));
+		}
+	};
+	const runs = () => events.filter((e) => e.type === "agent.end").length;
+	const settled = (count: number) => until(async () => runs() >= count && !(await session.status()).isStreaming, `${String(count)} settled runs`);
+	const markers = async () => (await h.root.entries({ order: "descending" }, 100, undefined, context)).items.filter((e) => e.kind === IDLE_COMPACTION_ENTRY).length;
+	const compacted = () => (session.messages() as { source?: string }[]).some((m) => m.source === "compaction");
+	const warnings = () => events.flatMap((e) => (e.type === "command.output" && (e as { level?: string }).level === "warning" ? [String((e as { message?: string }).message)] : []));
+	const quiet = () => until(async () => !(await session.status()).isCompacting, "a settled compaction");
+	await session.start();
+	// A small keep window, so the compaction has history to summarize (null: the Chat's default, 20k).
+	if (options.keepRecentTokens !== null) await session.configure({}, { compaction: { keepRecentTokens: options.keepRecentTokens ?? 1 } });
+	session.setViewed(true);
+	return { h, session, events, until, settled, markers, compacted, warnings, quiet };
+}
+const PAD = `pad:${"x".repeat(330_000)}`;
+/** The model of each summary request, in order. */
+const summaries = (store: string) => readLog<{ label: string; model?: string }>(join(store, "requests.log")).filter((line) => line.label === "summarize").map((line) => line.model ?? "faux");
+/** The provider's timer-summary model (idle-compact.ts IDLE_SUMMARY_MODELS); the cheap wake-up's light model is the same one on Anthropic. */
+const SUMMARY = "anthropic/claude-sonnet-5-5";
+/** The output cap of each summary request, in order. */
+const summaryCaps = (store: string) => readLog<{ label: string; maxTokens?: number }>(join(store, "requests.log")).filter((line) => line.label === "summarize").map((line) => line.maxTokens);
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("idle cache timer: a viewed idle Chat with a large prompt compacts on the cheap model once its timer fires, also when a `!` command ran over it; a new prompt cancels the timer", async () => {
+	const { store, cwd } = family("idle-timer");
+	let delay = 1_500;
+	const { session, events, until, settled, markers, compacted } = await idleChat(store, cwd, () => delay);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// Armed for 1.5 s; the next prompt's turn ends with a long delay, so only the first timer could compact.
+		delay = 60_000;
+		await session.prompt({ operationId: "op-2", text: "short" });
+		await settled(2);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "a new prompt cancelled the armed timer");
+
+		// A `!` command runs over the firing: its end checks again, and the Chat compacts.
+		delay = 1_500;
+		await session.prompt({ operationId: "op-3", text: "short again" });
+		await settled(3);
+		await session.shell("!sleep 2.5");
+		await until(async () => (await markers()) === 1, "the idle compaction marker");
+		assert.deepEqual(summaries(store), [SUMMARY], "one idle compaction, summarized by Sonnet, never the Chat's model");
+		assert.deepEqual(summaryCaps(store), [16_000], "the summary may take 16k output tokens");
+		assert.ok(events.some((e) => e.type === "shell.end"), "the command ran");
+		assert.ok(compacted(), "the summary is placed");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a restarted host arms it again, measured from the newest request; one whose cache already expired does not", async () => {
+	const { store, cwd } = family("idle-restart");
+	const first = await idleChat(store, cwd, () => 60_000);
+	await first.session.prompt({ operationId: "op-1", text: PAD });
+	await first.settled(1);
+	const turned = Date.now();
+	await first.session.close();
+	await wait(700);
+	// Its 0.5 s delay (and 60 s lead) passed during the restart, as the injected clock says: no timer.
+	const expired = await idleChat(store, cwd, () => 500, { now: () => Date.now() + 61_000 });
+	await wait(1_500);
+	await expired.session.close();
+	assert.deepEqual(summaries(store), [], "an expired cache gets no timer after a restart");
+	const second = await idleChat(store, cwd, () => 8_000);
+	try {
+		await second.until(async () => (await second.markers()) === 1, "the idle compaction marker after the restart");
+		assert.deepEqual(summaries(store), [SUMMARY]);
+		assert.ok(Date.now() - turned < 8_000 + 1_500, "fired 8 s after the turn's request, not after the reopen");
+	} finally {
+		await second.session.close();
+	}
+});
+
+test("idle cache timer: one pasted turn larger than the default keep window, then a small turn: the timer compaction still summarizes the paste", async () => {
+	const { store, cwd } = family("idle-one-paste");
+	let delay = 60_000;
+	const { session, until, settled, markers, compacted } = await idleChat(store, cwd, () => delay, { keepRecentTokens: null });
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// The paste alone exceeds the 20k keep window; the small turn after it arms a 1.5 s timer.
+		delay = 1_500;
+		await session.prompt({ operationId: "op-2", text: "small" });
+		await settled(2);
+		await until(async () => (await markers()) === 1, "the idle compaction marker");
+		assert.ok(compacted(), "a summary is placed");
+		assert.deepEqual(summaries(store), [SUMMARY]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a timer compaction with nothing to summarize warns once and does not retry in that stretch", async () => {
+	const { store, cwd } = family("idle-empty");
+	const { session, until, settled, warnings, markers, quiet } = await idleChat(store, cwd, () => 1_500, { keepRecentTokens: 10_000_000 });
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction found nothing")), "the empty-compaction warning");
+		await quiet();
+		await wait(2_500);
+		await session.prompt({ operationId: "op-2", text: "again" });
+		await settled(2);
+		await wait(2_500);
+		assert.equal(warnings().filter((w) => w.startsWith("Idle compaction found nothing")).length, 1, "warned once");
+		assert.deepEqual(summaries(store), [], "nothing summarized");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a failed cheap summary declines the compaction with a warning, without a second (Chat model) summary", async () => {
+	const { store, cwd } = family("idle-cheap-fail");
+	const { session, until, settled, markers, compacted, warnings, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-fail ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [SUMMARY], "only the cheap summary was asked for");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a summary cut off at its output cap declines the compaction with a warning, without a Chat-model summary", async () => {
+	const { store, cwd } = family("idle-summary-length");
+	const { session, until, settled, markers, compacted, warnings, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-length ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+		await quiet();
+		await wait(500);
+		assert.match(warnings().find((w) => w.startsWith("Idle compaction skipped"))!, /cut off at its length limit/);
+		assert.deepEqual(summaries(store), [SUMMARY], "only the timer's summary was asked for, never the Chat model's");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: /compact still runs Durable's own summary on the Chat's model", async () => {
+	const { store, cwd } = family("idle-manual");
+	const { session, until, settled, markers, compacted } = await idleChat(store, cwd, () => 60_000);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await session.compact();
+		await until(compacted, "the /compact summary");
+		assert.deepEqual(summaries(store), [`${OPUS.provider}/${OPUS.modelId}`]);
+		assert.equal(await markers(), 0, "not a timer compaction");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: losing the last viewer cancels a timer compaction whose summary is in flight", async () => {
+	const { store, cwd } = family("idle-viewer-loss");
+	const gate = join(cwd, "summary-gate");
+	const { session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the summary request");
+		session.setViewed(false);
+		writeFileSync(gate, "");
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "the cancelled compaction placed nothing");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: due counts from the request's start on the wall clock: inside the last minute it fires at once, after expiry (a host asleep) never", async () => {
+	const { store, cwd } = family("idle-clock");
+	let offset = 61_000;
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 60_000, { now: () => Date.now() + offset });
+	try {
+		// 61 s after the request started: past its 60 s due, before its expiry 60 s later.
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the immediate idle compaction", 8_000);
+	} finally {
+		await session.close();
+	}
+	const late = family("idle-clock-asleep");
+	offset = 0;
+	const asleep = await idleChat(late.store, late.cwd, () => 1_500, { now: () => Date.now() + offset });
+	try {
+		await asleep.session.prompt({ operationId: "op-1", text: PAD });
+		await asleep.settled(1);
+		// The host slept 10 minutes before the timer's callback ran: the cache is cold, nothing to save.
+		offset = 10 * 60_000;
+		await wait(2_500);
+		assert.deepEqual(summaries(late.store), [], "no compaction after expiry");
+	} finally {
+		await asleep.session.close();
+	}
+});
+
+test("idle cache timer: a turn on another model than the Chat's stored one (a cheap wake-up) never arms it", async () => {
+	const { store, cwd } = family("idle-other-model");
+	const { h, session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await h.root.configure({ model: { provider: "anthropic", modelId: "claude-sonnet-5-5" } }, context);
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		// As a cheap turn ends: the own model is stored again.
+		await h.root.configure({ model: OPUS }, context);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "the other model's request armed nothing");
+	} finally {
+		await session.close();
+	}
+});
+
+/** A background-bash completion submitted as BackgroundBash delivers it (`submitWake`). */
+const wakeDraft = (requestId: string, output: string) => ({ type: "input" as const, content: output.startsWith("pad:") ? output : `Background bash ${requestId} complete (exit 0).\n${output}`, whenBusy: "followUp" as const, requestId });
+const turns = (store: string) => readLog<{ label: string; model?: string }>(join(store, "requests.log")).filter((line) => line.label !== "summarize");
+
+test("idle cache timer and cheap wake: a wake after a timer compaction runs on the cheap model; that large cheap turn never arms the timer", async () => {
+	const { store, cwd } = family("idle-then-cheap");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction and its marker");
+		// The marker entry and the IdleCacheDoc intent do not hide the compaction: the wake is cheap.
+		const id = await submitWake(h.root, wakeDraft("job-1", PAD), h.models);
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, "anthropic/claude-sonnet-5-5"]);
+		// A padded completion (the faux model answers it briefly): the cheap turn's >80k-token prompt on Sonnet, and its run reset the stretch: only its usage could arm a second compaction.
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [SUMMARY], "the cheap turn armed nothing");
+		assert.equal(await markers(), 1);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: a wake while the timer's cheap summary is in flight never switches to the cheap model", async () => {
+	const { store, cwd } = family("idle-cheap-race");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the timer's summary request");
+		const id = await submitWake(h.root, wakeDraft("job-1", "all tests passed"), h.models);
+		assert.equal((await h.harness.snapshot(LiveDoc, h.root.id, context))?.run?.override, undefined, "no cheap run during a timer compaction");
+		writeFileSync(gate, "");
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		await quiet();
+		assert.deepEqual(turns(store).map((t) => t.model), [`${OPUS.provider}/${OPUS.modelId}`, `${OPUS.provider}/${OPUS.modelId}`], "the wake ran on the own model");
+		assert.deepEqual(summaries(store), [SUMMARY]);
+		assert.deepEqual((await h.harness.snapshot(AgentDoc, h.root.id, context))?.model, OPUS);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a reopen in the same idle stretch never pays for a second summary after a truncated one", async () => {
+	const { store, cwd } = family("idle-truncated-reopen");
+	const first = await idleChat(store, cwd, () => 1_500);
+	await first.session.prompt({ operationId: "op-1", text: `pad:summary-length ${"x".repeat(330_000)}` });
+	await first.settled(1);
+	await first.until(() => first.warnings().some((w) => w.startsWith("Idle compaction skipped")), "the decline warning");
+	await first.quiet();
+	await first.session.close();
+	// Viewed again before the cache entry expires: the timer fires at once, for the request already attempted.
+	const second = await idleChat(store, cwd, () => 1_500);
+	try {
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [SUMMARY], "one summary request for the stretch");
+	} finally {
+		await second.session.close();
+	}
+});
+
+test("idle cache timer: a Chat on Sonnet has no cheaper summary writer and never arms it", async () => {
+	const { store, cwd } = family("idle-sonnet-chat");
+	const { h, session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await h.root.configure({ model: { provider: "anthropic", modelId: "claude-sonnet-5-5" } }, context);
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "no cold summary on the Chat's own model");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: the owner choosing the cheap model during a cheap turn never arms the timer on it", async () => {
+	const { store, cwd } = family("idle-owner-cheap");
+	const gate = join(cwd, "turn-gate-file");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction");
+		const id = await submitWake(h.root, wakeDraft("job-1", `pad:turn-gate:${gate} ${"x".repeat(330_000)}`), h.models);
+		await until(() => turns(store).length === 2, "the cheap request");
+		await session.setModel("anthropic", "claude-sonnet-5-5");
+		writeFileSync(gate, "");
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.equal(turns(store)[1]!.model, "anthropic/claude-sonnet-5-5", "the wake ran cheap");
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [SUMMARY], "the cheap turn armed nothing");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a new large turn that ends while a cancelled summary still unwinds arms the timer once it settles", async () => {
+	const { store, cwd } = family("idle-unwinding");
+	const gate = join(cwd, "summary-gate");
+	const { session, until, settled, markers, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the held summary request");
+		// The owner's turn cancels the summary, which unwinds only once its request returns.
+		await session.prompt({ operationId: "op-2", text: PAD });
+		await settled(2);
+		await wait(500);
+		writeFileSync(gate, "");
+		await quiet();
+		await until(async () => (await markers()) === 1, "the timer compaction for the newer turn", 10_000);
+		assert.deepEqual(summaries(store), [SUMMARY, SUMMARY]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: the Chat's model changing before the timer's admission sends no summary to the previous provider", async () => {
+	const { store, cwd } = family("idle-model-switch");
+	const { h, session, settled, quiet } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(300);
+		// The timer reads the Chat's model, then the owner switches to Terra before the compaction is admitted.
+		const agent = h.root.agent.bind(h.root);
+		let switched = false;
+		h.root.agent = (async (c: Parameters<typeof agent>[0]) => {
+			// The timer's own read of the model (its `status()` read comes first and must not switch).
+			const timer = /idleFire/.test(new Error().stack ?? "") && !/status/.test(new Error().stack ?? "");
+			const read = await agent(c);
+			if (timer && !switched) {
+				switched = true;
+				await h.root.configure({ model: { provider: "openai-codex", modelId: "gpt-6.1-terra" } }, context);
+			}
+			return read;
+		}) as typeof h.root.agent;
+		await wait(2_500);
+		await quiet();
+		assert.ok(switched, "the timer fired");
+		assert.deepEqual(summaries(store), [], "no summary on the previous provider's model");
+	} finally {
+		await session.close();
+	}
+});
+
+/** Holds the timer summary's provider auth (Sonnet's), before anything is sent, until `release`. */
+function holdSummaryAuth(h: Awaited<ReturnType<typeof idleChat>>["h"]) {
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	const state = { held: false, release: () => release() };
+	const getAuth = h.models.getAuth.bind(h.models);
+	h.models.getAuth = (async (model: unknown, options?: never) => {
+		const target = model as { provider?: string; id?: string };
+		if (target.provider === "anthropic" && target.id === "claude-sonnet-5-5" && !state.held) {
+			state.held = true;
+			await released;
+		}
+		return getAuth(model as never, options);
+	}) as unknown as typeof h.models.getAuth;
+	return state;
+}
+
+test("idle cache timer: the owner switching models while the timer's summary waits for provider auth aborts it: nothing goes to the previous provider, nothing is placed", async () => {
+	const { store, cwd } = family("idle-switch-held-auth");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const auth = holdSummaryAuth(h);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => auth.held, "the timer summary waiting for its auth");
+		await session.setModel("openai-codex", "gpt-6.1-terra");
+		auth.release();
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [], "no summary request to the previous provider");
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		auth.release();
+		await session.close();
+	}
+});
+
+test("idle cache timer: a stale timer callback released after a newer summary started never takes over its cancel: losing the last viewer still cancels it", async () => {
+	const { store, cwd } = family("idle-stale-callback");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	// The first timer callback is held at its read of the Chat's model (its `status()` read passes).
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	let held = false;
+	const agent = h.root.agent.bind(h.root);
+	h.root.agent = (async (c: Parameters<typeof agent>[0]) => {
+		const stack = new Error().stack ?? "";
+		if (!held && /idleFire/.test(stack) && !/status/.test(stack)) {
+			held = true;
+			await released;
+		}
+		return agent(c);
+	}) as typeof h.root.agent;
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => held, "the held first timer callback");
+		// Tab closed and reopened: a new timer fires at once and its summary is in flight.
+		session.setViewed(false);
+		session.setViewed(true);
+		await until(() => summaries(store).length === 1, "the newer summary request");
+		release();
+		await wait(500);
+		// The last tab closes: the newer summary must be cancelled.
+		session.setViewed(false);
+		writeFileSync(gate, "");
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "the cancelled summary placed nothing");
+		assert.equal(await markers(), 0);
+	} finally {
+		release();
+		writeFileSync(gate, "");
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: a /compact that finishes while the timer's summary is held leaves a wake on the own model", async () => {
+	const { store, cwd } = family("idle-manual-during-timer");
+	const { h, session, until, settled, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const auth = holdSummaryAuth(h);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => auth.held, "the held timer summary");
+		await session.compact();
+		await until(compacted, "the /compact summary placed while the timer's is held");
+		const id = await submitWake(h.root, wakeDraft("job-1", "all tests passed"), h.models);
+		assert.equal((await h.harness.snapshot(LiveDoc, h.root.id, context))?.run?.override, undefined, "no cheap run while a timer compaction is active");
+		auth.release();
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		await quiet();
+		assert.equal(turns(store).at(-1)?.model, `${OPUS.provider}/${OPUS.modelId}`, "the wake ran on the own model");
+	} finally {
+		auth.release();
+		await session.close();
+	}
+});
+
+test("idle cache timer: a replayed prompt (fresh: false) leaves the timer armed", async () => {
+	const { store, cwd } = family("idle-replay");
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		const replay = await session.prompt({ operationId: "op-1", text: PAD });
+		assert.equal(replay.fresh, false);
+		await until(async () => (await markers()) === 1, "the idle compaction after the replay", 8_000);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: a restart after the summary was placed finishes the marker and the Workstream note from the stored intent, without summarizing again", async () => {
+	const { IdleCacheDoc, checkpointState, IDLE_NOTE_PRODUCER } = await import("../src/idle-compact.ts");
+	const { userWorkstreamStore } = await import("../src/chat-message.ts");
+	const { store, cwd } = family("idle-restore");
+	// Outside PI_TMP: the store refuses references into swept temporary folders.
+	mkdirSync(join(import.meta.dirname, "..", ".runs"), { recursive: true });
+	const notes = mkdtempSync(join(import.meta.dirname, "..", ".runs", "idle-restore-"));
+	after(() => rmSync(notes, { recursive: true, force: true }));
+	const workstreams = userWorkstreamStore();
+	const created = await workstreams.create({ workstreamId: "ws-idle-restore", idempotencyKey: "c", title: "Restore", producer: "session" });
+	const payload = { sessionId: "chat-idle-timer", associationKey: "chat-idle-timer" };
+	await workstreams.append({ workstreamId: "ws-idle-restore", expectedRevision: created.acceptedRevision, idempotencyKey: "j", records: [{ type: "session.pending", producer: "session", payload }, { type: "session.confirmed", producer: "session", payload }] });
+	const first = await idleChat(store, cwd, () => 600_000, { notes });
+	await first.session.prompt({ operationId: "op-1", text: PAD });
+	await first.settled(1);
+	// The state a kill leaves between placement and note: a placed summary and its stored intent.
+	const task = await first.h.root.compact(undefined, context);
+	const { outcome } = (await first.h.harness.waitForTask(task, context)).state;
+	await (await first.h.harness.submission((outcome as unknown as { result: { submissionId: never } }).result.submissionId, context))!.wait(context);
+	const baseline = { workstreamId: "ws-idle-restore", checkpoint: checkpointState((await workstreams.inspect("ws-idle-restore")).sessions.find((s) => s.id === "chat-idle-timer")) };
+	const firedAt = Date.parse("2026-01-02T03:04:05.000Z");
+	await first.h.root.commit(async (tx) => {
+		(await tx.doc(IdleCacheDoc, first.h.root.id)).intent = { task: Number(task), rootId: Number(first.h.root.id), firedAt, expiresAt: Date.now() + 60_000, summaryModel: { provider: "anthropic", modelId: "claude-sonnet-5-5" }, baseline };
+	}, context);
+	await first.session.close();
+	const second = await idleChat(store, cwd, () => 600_000, { notes });
+	try {
+		await second.until(async () => (await second.markers()) === 1, "the marker after the restart");
+		const path = join(notes, "ws-idle-restore", "idle-notes", "2026-01-02T03-04-05.000Z-chat-idle-timer.md");
+		await second.until(() => existsSync(path), "the idle note file");
+		await second.until(async () => (await workstreams.inspect("ws-idle-restore")).sessions.find((s) => s.id === "chat-idle-timer")?.latestCheckpoint?.references?.includes(path) === true, `the host checkpoint (${second.warnings().join("; ")})`);
+		const events = await workstreams.watch({ workstreamId: "ws-idle-restore" });
+		assert.equal(events.mode === "replay" ? (events.events.at(-1)?.records[0] as { producer: string }).producer : undefined, IDLE_NOTE_PRODUCER);
+		assert.equal(summaries(store).length, 1, "only the summary before the kill");
+		await second.until(async () => (await second.h.harness.snapshot(IdleCacheDoc, second.h.root.id, context))?.intent === null, "the intent cleared");
+	} finally {
+		await second.session.close();
+	}
+});
+
+/** Runs `before` once, right before Durable's placement commit (`place`) of a hook-written summary starts. */
+function beforePlacement(h: Awaited<ReturnType<typeof idleChat>>["h"], before: () => unknown) {
+	// The hook runtime's commits go through the harness's untyped `commitWith`.
+	const harness = h.harness as unknown as { commitWith: (...args: unknown[]) => unknown };
+	const commitWith = harness.commitWith.bind(harness);
+	const state = { reached: false };
+	harness.commitWith = (...args) => {
+		if (state.reached || !/at place \(/.test(new Error().stack ?? "")) return commitWith(...args);
+		state.reached = true;
+		return (async () => (await before(), commitWith(...args)))();
+	};
+	return state;
+}
+
+test("idle cache timer: losing the last viewer after the cheap summary returned, right before its placement, places nothing", async () => {
+	const { store, cwd } = family("idle-viewer-loss-placement");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const placement = beforePlacement(h, () => session.setViewed(false));
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(() => placement.reached, "the placement commit");
+		await quiet();
+		await wait(500);
+		assert.deepEqual(summaries(store), [SUMMARY]);
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		await session.close();
+	}
+});
+
+for (const how of ["setModel", "a stored model change"] as const)
+	test(`idle cache timer: the Chat's model changing to Terra (${how}) right before the summary's placement places nothing`, async () => {
+		const { store, cwd } = family(`idle-switch-placement-${how === "setModel" ? "set" : "stored"}`);
+		const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+		const terra = { provider: "openai-codex", modelId: "gpt-6.1-terra" };
+		const placement = beforePlacement(h, () => (how === "setModel" ? session.setModel(terra.provider, terra.modelId) : h.root.configure({ model: terra }, context)));
+		try {
+			await session.prompt({ operationId: "op-1", text: PAD });
+			await settled(1);
+			await until(() => placement.reached, "the placement commit");
+			await quiet();
+			await wait(500);
+			assert.equal(compacted(), false, "the previous model's Sonnet summary is not placed");
+			assert.equal(await markers(), 0);
+		} finally {
+			await session.close();
+		}
+	});
+
+test("idle cache timer: losing the last viewer while the summary's placement waits behind another commit places nothing", async () => {
+	const { store, cwd } = family("idle-viewer-loss-queued");
+	const gate = join(cwd, "summary-gate");
+	const { h, session, until, settled, markers, compacted, quiet } = await idleChat(store, cwd, () => 1_500);
+	const harness = h.harness as unknown as { commitWith: (...args: unknown[]) => unknown };
+	const commitWith = harness.commitWith.bind(harness);
+	let queued!: () => void;
+	const placing = new Promise<void>((resolve) => (queued = resolve));
+	harness.commitWith = (...args) => {
+		const result = commitWith(...args);
+		if (/at place \(/.test(new Error().stack ?? "")) queued();
+		return result;
+	};
+	let entered!: () => void;
+	const holding = new Promise<void>((resolve) => (entered = resolve));
+	let release!: () => void;
+	const released = new Promise<void>((resolve) => (release = resolve));
+	let held: Promise<unknown> | undefined;
+	try {
+		await session.prompt({ operationId: "op-1", text: `pad:summary-gate:${gate} ${"x".repeat(330_000)}` });
+		await settled(1);
+		await until(() => summaries(store).length === 1, "the held summary request");
+		held = h.root.commit(async () => (entered(), await released), context);
+		await holding;
+		writeFileSync(gate, "");
+		await placing;
+		session.setViewed(false);
+		release();
+		await held;
+		await quiet();
+		await wait(500);
+		assert.equal(compacted(), false, "nothing placed");
+		assert.equal(await markers(), 0);
+	} finally {
+		release();
+		await held;
+		await session.close();
+	}
+});
+
+test("idle cache timer: a Chat on Haiku (cheaper than the Sonnet writer) never arms it", async () => {
+	const { store, cwd } = family("idle-haiku-chat");
+	const { session, settled } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.setModel("anthropic", "claude-haiku-5-5");
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await wait(2_500);
+		assert.deepEqual(summaries(store), [], "no Sonnet summary for a Haiku Chat");
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer: reselecting the Chat's current model keeps the armed timer", async () => {
+	const { store, cwd } = family("idle-same-model");
+	const { session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await session.setModel(OPUS.provider, OPUS.modelId);
+		await until(async () => (await markers()) === 1, "the timer compaction", 8_000);
+		assert.deepEqual(summaries(store), [SUMMARY]);
+	} finally {
+		await session.close();
+	}
+});
+
+test("idle cache timer and cheap wake: an older Opus outside the routing roster (claude-opus-4-7) gets the timer and the cheap wake on Sonnet", async () => {
+	const { store, cwd } = family("idle-opus-4-7");
+	const { h, session, until, settled, markers } = await idleChat(store, cwd, () => 1_500);
+	try {
+		await session.setModel("anthropic", "claude-opus-4-7");
+		await session.prompt({ operationId: "op-1", text: PAD });
+		await settled(1);
+		await until(async () => (await markers()) === 1, "the timer compaction");
+		const id = await submitWake(h.root, wakeDraft("job-1", "tests passed"), h.models);
+		await (await h.harness.submission(id, context))!.wait(context);
+		await settled(2);
+		assert.deepEqual(turns(store).map((t) => t.model), ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-5-5"]);
+	} finally {
+		await session.close();
+	}
+});
+
 test("/back: Working Mode returns to its starting values, the context restarts at the host's handoff with the open set verbatim (no summarizer call), the set stays open, one orient turn runs", async () => {
 	const { h, store, session, settled } = await quietChat("back");
 	try {
@@ -658,6 +1351,78 @@ test("crash row question: an open set survives a kill, a stale answer is refused
 	assert.equal(integrity(store), "ok");
 });
 
+/** A 1×1 PNG. */
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("ask_user images: closeAsk with images delivers the answers text plus the images once, refuses a non-image, and the answers record keeps them", async () => {
+	const { store, cwd } = family("ask-images");
+	const host = new ChatHost(store, cwd);
+	assert.ok((await host.ready).capabilities?.includes("ask-images"), "the host reports answer images");
+	await host.call("prompt", { operationId: "op-ask", text: `call:ask_user ${JSON.stringify(ASK)}` });
+	const opened = await host.until((e) => e.type === "ask.opened", "the ask") as UiEvent & { ask: { askId: string; revision: string } };
+	await idle(host, 1);
+	const close = (operationId: string, images: unknown) =>
+		host.call<{ result: string; retried?: boolean }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId, outcome: answered(opened.ask.askId), content: "Answers: target staging", images });
+	await assert.rejects(close("op-bad", [{ data: PNG, mimeType: "image/svg+xml" }]), /images must be image blocks of image\/jpeg, image\/png, image\/gif or image\/webp/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png" }]), /images must be image blocks/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "not base64" }]), /image 1 is not valid base64/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "iVBORw0" }]), /image 1 is not valid base64/, "a length that is no multiple of 4");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "" }]), /image 1 is not valid base64/, "empty data");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AB==" }]), /image 1 is not valid base64/, "'==' with nonzero padding bits");
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "AAB=" }]), /image 1 is not valid base64/, "'=' with nonzero padding bits");
+	await assert.rejects(close("op-bad", Array.from({ length: 17 }, () => ({ mimeType: "image/png", data: PNG }))), /at most 16 images/);
+	await assert.rejects(close("op-bad", [{ mimeType: "image/png", data: "A".repeat(Math.ceil(10 * 1024 * 1024 / 3) * 4 + 4) }]), /image 1 is larger than 10 MiB/);
+	assert.deepEqual((await host.call<Status>("status")).pendingAsks?.length, 1, "a refused close leaves the set open");
+	const image = { type: "image", data: PNG, mimeType: "image/png" };
+	assert.equal((await close("op-i1", [image])).result, "closed");
+	const retried = await close("op-i1", [image]);
+	assert.deepEqual([retried.result, retried.retried], ["closed", true], "a retry returns the outcome");
+	await idle(host, 2);
+	const deliveries = logged(store).filter((l) => l.label.startsWith("Answers: target staging"));
+	assert.equal(deliveries.length, 1, "the answers reached the model exactly once");
+	assert.equal(deliveries[0]?.images, 1, "with their image");
+	const record = (await host.call<Transcript>("transcript")).messages.find((m) => (m as { customType?: string }).customType === "pi-web.ask.answers");
+	assert.deepEqual(record?.content, [{ type: "text", text: "Answers: target staging" }, image], "the answers record keeps the text and the image");
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
+test("ask_user approval-only: a set with approval: true may omit questions or give none; without approval it is refused; its approval reaches the model first", async () => {
+	const { store, cwd } = family("ask-approval-only");
+	const host = new ChatHost(store, cwd);
+	await host.ready;
+	await host.call("prompt", { operationId: "op-none", text: `call:ask_user ${JSON.stringify({ context: ASK.context })}` });
+	await idle(host, 1);
+	const refused = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+	assert.equal(refused?.isError, true);
+	assert.match(textOf(refused?.content), /questions are required for a new question set/);
+	await host.call("prompt", { operationId: "op-empty", text: `call:ask_user ${JSON.stringify({ context: ASK.context, questions: [] })}` });
+	await idle(host, 2);
+	assert.equal((await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1)?.isError, true, "an empty list without approval is refused");
+	let runs = 2;
+	for (const [n, call] of [{ context: ASK.context, approval: true }, { context: ASK.context, approval: true, questions: [] }].entries()) {
+		await host.call("prompt", { operationId: `op-approve-${String(n)}`, text: `call:ask_user ${JSON.stringify(call)}` });
+		await idle(host, ++runs);
+		const posted = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.equal(posted?.isError, false, textOf(posted?.content));
+		assert.match(textOf(posted?.content), /^Posted the context for approval to the user/);
+		const opened = host.events.filter((e) => e.type === "ask.opened")[n] as UiEvent & { ask: { askId: string; revision: string; approval?: true; questions: unknown[] } };
+		assert.deepEqual([opened.ask.approval, opened.ask.questions], [true, []]);
+		await host.call("prompt", { operationId: `op-drop-${String(n)}`, text: `call:ask_user ${JSON.stringify({ update: opened.ask.askId, approval: false })}` });
+		await idle(host, ++runs);
+		const dropped = (await host.call<Transcript>("transcript")).messages.filter((m) => m.role === "toolResult").at(-1);
+		assert.match(textOf(dropped?.content), /An ask must contain at least one question/, "dropping approval from a set without questions is refused");
+		const outcome = { askId: opened.ask.askId, reason: "submitted", askedAt: "", closedAt: "", context: ASK.context, approved: true, questions: [], answeredCount: 0, unansweredIds: [], summary: "Answered 0 of 0; none left unanswered" };
+		const content = `The user approved the context.\nThe user submitted answers to question set ${opened.ask.askId}.\n\nAnswered 0 of 0; none left unanswered`;
+		assert.equal((await host.call<{ result: string }>("closeAsk", { askId: opened.ask.askId, revision: opened.ask.revision, operationId: `op-close-${String(n)}`, outcome, content })).result, "closed");
+		await idle(host, ++runs);
+	}
+	assert.equal(logged(store).filter((l) => l.label.startsWith("The user approved the context.")).length, 2, "each approval reached the model, approval first");
+	assert.equal((await host.call<Status>("status")).pendingAsks, undefined);
+	await host.close();
+	assert.equal(integrity(store), "ok");
+});
+
 test("ask_user: a question without detail is refused; a 4000-character detail is accepted and numbering is stripped; the description puts all explanation in the set", async () => {
 	const { store, cwd } = family("ask-detail");
 	const host = new ChatHost(store, cwd);
@@ -743,6 +1508,60 @@ test("ask_user: the set tracks who supplied its context; the user's edit, kept b
 		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, context: "Mine" })}` });
 		await settled(4);
 		assert.deepEqual([(await open()).context, (await open()).contextEdited], ["Mine", undefined], "the agent's revision, though its text is the user's");
+	} finally {
+		await session.close();
+	}
+});
+
+test("wholeRecord: each one-by-one send's image metadata stays in the whole record under its own answer, tagged with that send's revision; a hidden answer's images drop out", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const record = (id: string) => ({ question: { id, question: `${id}?`, options: [] }, answered: true, values: ["x"] });
+	const image = (id: string | undefined, reference: string): { target: { kind: string; id?: string }; reference: string; mimeType: string } => ({ target: id === undefined ? { kind: "note" } : { kind: "question", id }, reference, mimeType: "image/png" });
+	const send = (ids: string[], revision: string | undefined, images: ReturnType<typeof image>[]) => ({ askId: "a1", reason: "submitted", questions: ids.map(record), answeredCount: ids.length, unansweredIds: [], summary: "s", images, ...(revision === undefined ? {} : { partial: true, revision }) });
+	// A question with id "note" is not the note: targets are objects.
+	const whole = wholeRecord(send(["c"], undefined, [image("c", "[PIC_1]"), image(undefined, "[PIC_2]")]), [send(["a"], "r2", [image("a", "[PIC_1]")]), send(["note"], "r3", [image("note", "[PIC_1]"), image("note", "[PIC_2]")])], ["a", "note", "c"], false) as { images?: unknown[] } | undefined;
+	assert.deepEqual(whole?.images, [
+		{ ...image("a", "[PIC_1]"), revision: "r2" },
+		{ ...image("note", "[PIC_1]"), revision: "r3" },
+		{ ...image("note", "[PIC_2]"), revision: "r3" },
+		image("c", "[PIC_1]"),
+		image(undefined, "[PIC_2]"),
+	]);
+	const many = Array.from({ length: 101 }, (_, i) => send([`q${String(i)}`], `r${String(i)}`, [image(`q${String(i)}`, "[PIC_1]")]));
+	const bounded = wholeRecord(send(["last"], undefined, []), many, [], false) as { images?: { target: { id?: string } }[] } | undefined;
+	assert.deepEqual([bounded?.images?.length, bounded?.images?.[0]?.target.id], [99, "q2"], "the two hidden answers' images drop out");
+});
+
+test("wholeRecord: an earlier send's answer rows carry that send's revision, as its images do, so a reused question id keeps each photo under its own row", async () => {
+	const { wholeRecord } = await import("../src/workbench.ts");
+	const image = (reference: string) => ({ target: { kind: "question", id: "q" }, reference, mimeType: "image/png" });
+	const send = (wording: string, revision: string | undefined, reference: string) => ({ askId: "a1", reason: "submitted", questions: [{ question: { id: "q", question: wording, options: [] }, answered: true, values: ["x"] }], answeredCount: 1, unansweredIds: [], summary: "s", images: [image(reference)], ...(revision === undefined ? {} : { partial: true, revision }) });
+	const whole = wholeRecord(send("q again?", undefined, "[PIC_B]"), [send("q?", "r2", "[PIC_A]")], ["q"], false) as { questions: { revision?: string }[]; images: { revision?: string; reference: string }[] } | undefined;
+	assert.deepEqual(whole?.questions.map((row) => row.revision), ["r2", undefined], "the earlier row carries r2, the final row none");
+	const photos = (row: { revision?: string }) => whole?.images.filter((i) => i.revision === row.revision).map((i) => i.reference);
+	assert.deepEqual(whole?.questions.map(photos), [["[PIC_A]"], ["[PIC_B]"]], "row 1 shows only A, row 2 only B");
+	// 101 sends reusing one id, 16 photos each: only the kept rows' sends keep their photos, under PI WEB's 1,600-image limit.
+	const sixteen = (send_: ReturnType<typeof send>) => ({ ...send_, images: Array.from({ length: 16 }, (_, i) => image(`[PIC_${String(i + 1)}]`)) });
+	const many = Array.from({ length: 100 }, (_, i) => sixteen(send("q?", `r${String(i)}`, "")));
+	const bounded = wholeRecord(sixteen(send("q?", undefined, "")), many, ["q"], false) as { images: { revision?: string }[] } | undefined;
+	assert.equal(bounded?.images.length, 1600, "the hidden send's 16 photos drop out");
+	assert.ok(bounded?.images.every((i) => i.revision !== "r0"), "none from the hidden send r0");
+});
+
+test("ask_user: approval: true marks the set for an Approve button; a revision without it keeps it, approval: false drops it", async () => {
+	const { h, session, settled } = await quietChat("ask-approval");
+	try {
+		await session.prompt({ operationId: "op-ask", text: `call:ask_user ${JSON.stringify({ ...ASK, approval: true })}` });
+		await settled(1);
+		const open = async () => Object.values((await questionsState(h.harness, h.root)).open)[0]!;
+		const { askId, approval } = await open();
+		assert.equal(approval, true);
+		await session.prompt({ operationId: "op-u1", text: `call:ask_user ${JSON.stringify({ update: askId })}` });
+		await settled(2);
+		assert.equal((await open()).approval, true, "a revision without approval keeps it");
+		await session.prompt({ operationId: "op-u2", text: `call:ask_user ${JSON.stringify({ update: askId, approval: false })}` });
+		await settled(3);
+		assert.equal((await open()).approval, undefined);
 	} finally {
 		await session.close();
 	}

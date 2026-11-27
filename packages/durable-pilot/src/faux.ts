@@ -52,13 +52,16 @@ const LONG = Array.from({ length: 120 }, (_, i) => `word${i}`).join(" ");
 
 /**
  * Script, by the last non-system message:
- * - `gen` → a long answer (stream slowly to observe partials);
+ * - `gen` → a long answer (stream slowly to observe partials); `pad:<filler>` → `padded` (a large prompt, a short answer);
  * - `call:<tool> <json args>` → call that tool;
  * - `spawn:<name> <message>` → call subagent spawn; `leaf:<message>` → call leaf;
- * - `ask:<text>` → call ask_user;
- * - `fail` → a non-retryable provider error;
+ * - `ask:<text>` → call ask_user; `hand_back:<reason>` anywhere, while hand_back is offered → call it (`hand_back+read:`
+ *   with a `read` in the same batch);
+ * - `fail` → a non-retryable provider error; `turn-gate:<file>` anywhere → wait until that file exists (or the request is aborted);
  * - a compaction summary request → `Summary of <n> earlier messages.`, logged as `summarize` with its focus; a focus
- *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error;
+ *   containing `slow` streams a long summary, one containing `fail` is a non-retryable error (as is a summarized
+ *   conversation containing `summary-fail`; one containing `summary-length` is cut off at its output cap (`length`);
+ *   one containing `summary-gate:<file>` waits until that file exists); the log line carries its `maxTokens`;
  * - a tool result → `done`, unless `repropose` and the result says the tool was interrupted: then call it again;
  * - a child's assignment (profile text, then `Assignment:\n<script>`) → the script after it; a completion wake or a
  *   Worker's settle reminder → `subagent_collect` (a notice only when it names results to collect); the lead's update
@@ -75,7 +78,9 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		const system = context.messages.flatMap((message) => (message.role === "system" ? [getSystemMessageText(message)] : [])).join("\n");
 		const last = messages.at(-1);
 		// A Working Mode block delivered with a prompt comes first; the script reads the user's text after it.
-		const raw = textOfMessage(last);
+		// A cheap wake-up's instruction (one line, cheap-wake.ts) rides on the delivery; the script reads the text without it.
+		const cheap = messages.some((m) => textOfMessage(m).includes("[Cheap wake-up]"));
+		const raw = textOfMessage(last).replace(/\n\n\[Cheap wake-up\][^\n]*/, "");
 		const withReminder = raw.replace(/^<working-mode seq="\d+">[\s\S]*?<\/working-mode>/, "");
 		const block = withReminder !== raw ? /^<working-mode seq="(\d+)">/.exec(raw)![1] : undefined;
 		// An open-questions reminder rides last in a plain prompt; the script reads the user's text before it.
@@ -89,10 +94,12 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 		if (system.includes("context summarization assistant")) {
 			const focus = /\n\nAdditional focus: ([\s\S]*)$/.exec(raw)?.[1];
 			const count = (raw.match(/^\[(?:User|Assistant|Tool result)\]/gm) ?? []).length;
-			logLine(join(dir, "requests.log"), { label: "summarize", ...(focus === undefined ? {} : { focus }) });
-			const gate = /gate:(\S+)/.exec(focus ?? "")?.[1];
+			const maxTokens = (streamOptions as { maxTokens?: number } | undefined)?.maxTokens;
+			logLine(join(dir, "requests.log"), { label: "summarize", ...routed, ...(focus === undefined ? {} : { focus }), ...(maxTokens === undefined ? {} : { maxTokens }) });
+			const gate = /gate:(\S+)/.exec(focus ?? "")?.[1] ?? /summary-gate:(\S+)/.exec(raw)?.[1];
 			while (gate !== undefined && !existsSync(gate)) await new Promise((resolve) => setTimeout(resolve, 20));
-			if (focus?.includes("fail") === true) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
+			if (focus?.includes("fail") === true || raw.includes("summary-fail")) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "400 summarizer rejected (scripted)" });
+			if (raw.includes("summary-length")) return fauxAssistantMessage([fauxText("Summary cut off mid")], { stopReason: "length" });
 			return fauxAssistantMessage([fauxText(`Summary of ${count} earlier messages.${focus?.includes("slow") === true ? ` ${LONG}` : ""}`)]);
 		}
 		// PI WEB's Chat title request (its sessionNameGenerator prompt): not a turn, so not counted.
@@ -118,8 +125,14 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			...(reasoning === undefined ? {} : { reasoning }),
 			...(cacheRetention === undefined ? {} : { cacheRetention }),
 			...(modes.length === 0 ? {} : { modes }),
+			...(cheap ? { cheapInstruction: true } : {}),
 			tools: offered(context),
 		});
+		const turnGate = /turn-gate:(\S+)/.exec(text)?.[1];
+		while (turnGate !== undefined && !existsSync(turnGate)) {
+			if (streamOptions?.signal?.aborted === true) return fauxAssistantMessage([], { stopReason: "aborted" });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
 		if (options.hold !== undefined && options.holdOn !== undefined && text.startsWith(options.holdOn))
 			await options.hold(`request:${options.holdOn}`, streamOptions?.signal);
 		if (last?.role === "toolResult") {
@@ -134,6 +147,7 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			return fauxAssistantMessage([fauxText(`done after ${last.toolName}`)]);
 		}
 		if (text === "gen") return fauxAssistantMessage([fauxText(LONG)]);
+		if (text.startsWith("pad:")) return fauxAssistantMessage([fauxText("padded")]);
 		// A completion notice carries the results it can; the lead collects only what it names.
 		if ((text.startsWith("Background children finished") && text.split("\n\n", 1)[0]!.includes("subagent_collect")) || text.startsWith("Your background Subagent"))
 			return fauxAssistantMessage([fauxToolCall("subagent_collect", {})], { stopReason: "toolUse" });
@@ -165,6 +179,10 @@ export function router(dir: string, options: { readonly hold?: Hold; readonly ho
 			});
 		const leaf = /^leaf:(.*)$/s.exec(text);
 		if (leaf !== null) return fauxAssistantMessage([fauxToolCall("leaf", { task: leaf[1]! })], { stopReason: "toolUse" });
+		// A cheap wake-up whose delivery says `hand_back:<reason>` hands back (only while the tool is offered).
+		const back = /hand_back(\+read)?:(.*)/.exec(text);
+		if (back !== null && offered(context).includes("hand_back"))
+			return fauxAssistantMessage([fauxToolCall("hand_back", { reason: back[2]! }), ...(back[1] === undefined ? [] : [fauxToolCall("read", { path: "missing.txt" })])], { stopReason: "toolUse" });
 		const ask = /^ask:(.*)$/s.exec(text);
 		if (ask !== null) return fauxAssistantMessage([fauxToolCall("ask_user", { question: ask[1]! })], { stopReason: "toolUse" });
 		return fauxAssistantMessage([fauxText(`ok: ${text}`)]);

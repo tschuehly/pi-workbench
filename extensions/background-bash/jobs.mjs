@@ -37,22 +37,43 @@ export function ownsProcess(job) {
 }
 export function readTail(path, size) {
   const length = Math.min(size, MAX_TAIL);
-  const buffer = Buffer.alloc(length);
+  // A cut tail is read with up to 16 KB before it, so key blocks are found in continuous text, delimiters whole.
+  // shortcut: a key block that starts more than 16 KB before the cut and never ends there is not recognized.
+  const back = Math.min(size - length, 16 * 1024);
+  const buffer = Buffer.alloc(back + length);
   const fd = openSync(path, "r");
-  try { readSync(fd, buffer, 0, length, size - length); } finally { closeSync(fd); }
-  const tail = buffer.toString("utf8").replace(/^\uFFFD+/u, "");
-  return length < size ? dropCutHead(tail) : tail;
+  try { readSync(fd, buffer, 0, back + length, size - length - back); } finally { closeSync(fd); }
+  const tail = buffer.subarray(back).toString("utf8").replace(/^\uFFFD+/u, "");
+  if (length === size) return tail;
+  // Key boundaries are found in the text as the redactor will see it: terminal codes stripped (`cleanOutput`).
+  return dropCutHead(cleanOutput(buffer.toString("utf8")), cleanOutput(tail).length);
 }
 
+const KEY_END = /-----END [A-Z ]*PRIVATE KEY-----/;
+/** A private-key block, or one that never ends (to the end of the text). */
+const KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+
 /**
- * A tail cut from a longer log may start inside a secret, where no redactor recognizes it: drop the cut token, and the
- * rest of a private-key block whose header was cut off.
+ * The last `tailLength` characters of `text`, cut where no redactor would recognize a secret: a private-key block the
+ * cut runs through is masked up to its end; otherwise the cut token is dropped, and the rest of a key block whose
+ * header lies beyond the text read.
  */
-function dropCutHead(tail) {
-  const text = tail.replace(/^\S+/, "");
-  const end = /-----END [A-Z ]*PRIVATE KEY-----/.exec(text);
-  return end !== null && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text.slice(0, end.index)) ? text.slice(end.index + end[0].length) : text;
+function dropCutHead(text, tailLength) {
+  // A tail cut inside a terminal code cleans to more text than the whole log's suffix: never past the start.
+  const cut = Math.max(0, text.length - tailLength);
+  // The cut token is dropped below, so a key whose header overlaps it (or starts exactly at the cut) is masked too.
+  const token = cut + (/^\S*/.exec(text.slice(cut))?.[0].length ?? 0);
+  for (const block of text.matchAll(KEY_BLOCK)) {
+    const end = block.index + block[0].length;
+    if (block.index < token && end > cut) return `[REDACTED:private-key]${text.slice(end)}`;
+  }
+  const rest = text.slice(cut).replace(/^\S+/, "");
+  const end = KEY_END.exec(rest);
+  return end !== null && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(rest.slice(0, end.index)) ? rest.slice(end.index + end[0].length) : rest;
 }
+
+/** For a finished log, which will not grow: also masks a private-key block that never ended. */
+const sealedRedact = (text) => redact(text).replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/, "[REDACTED:private-key]");
 
 /** A job as tools, status and completions show it. */
 export function describeJob(job) {
@@ -60,13 +81,15 @@ export function describeJob(job) {
 }
 
 /**
- * A finished job's completion message (not yet redacted): state, exit, log path and recent output, the last 20 lines
- * of a success and the whole retained tail otherwise, with truncation disclosed.
+ * A finished job's completion message (its header not yet redacted): state, exit, log path and recent output, the last
+ * 20 lines of a success and the whole retained tail otherwise, with truncation disclosed. The output is sanitized
+ * before lines are dropped, so a cut never separates a secret from the part the redactor recognizes it by.
  */
-export function completionContent(job) {
+export function completionContent(job, sanitize = sealedRedact) {
   const tail = readTail(job.logPath, job.bytes);
-  const shown = job.exitCode === 0 ? tail.replace(/\n$/, "").split("\n").slice(-20).join("\n") : tail;
-  return `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${cleanOutput(shown)}`;
+  const clean = sanitize(cleanOutput(tail));
+  const shown = job.exitCode === 0 ? clean.replace(/\n$/, "").split("\n").slice(-20).join("\n") : clean;
+  return `Background bash ${job.id} ${job.state}${job.exitCode === undefined ? " (exit unknown)" : ` (exit ${job.exitCode})`}.${job.error ? ` ${cleanOutput(job.error)}` : ""}\nFull output: ${job.logPath}\n${job.bytes > Buffer.byteLength(tail) ? "[showing recent output only]\n" : ""}${shown}`;
 }
 
 /** Redacted, control-free command, description and recent output for the Activity drawer. */
@@ -80,7 +103,7 @@ export function previewJob(job, chars) {
   return { command: redact(cleanOutput(job.command)).slice(0, 240), ...(job.description === undefined ? {} : { description: redact(cleanOutput(job.description)).slice(0, 120) }), output, logPath: job.logPath };
 }
 
-const VANISHED = "The job runner ended without recording an exit status";
+export const VANISHED = "The job runner ended without recording an exit status";
 
 /**
  * Launch a job under a caller-chosen ID (a host that persisted its launch intent first), idempotently: a job whose
@@ -88,24 +111,31 @@ const VANISHED = "The job runner ended without recording an exit status";
  * it runs the command (runner.mjs). Returns whether a runner was started. `cancelled`: record the job as cancelled
  * without starting a runner (its owner ended meanwhile).
  */
-export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false }) {
+export function launchJob({ root = defaultRoot(), id, command, description, cwd, timeout, env, sessionId, shell = "/bin/bash", args = ["-c"], startedAt, expiresAt = NaN, owned = false, ownerExecutionId = "", progressLog = "", cleanupGraceMs = 1000, runnerPath = RUNNER, lifetimeSeconds = MAX_LIFETIME_SECONDS, cancelled = false, fullAccess = false, prepare = false, prepared = false }) {
   if (!/^[\w-]+$/.test(id)) throw new Error(`Invalid job ID ${id}`);
   const dir = join(root, id);
   if (existsSync(join(dir, "claim")) || existsSync(join(dir, "exit"))) return false;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  closeSync(openSync(join(dir, "output.log"), "a", 0o600));
+  // `prepared`: start only the record made by an earlier `prepare` call; a lost record is never made again (throws).
+  if (prepared) {
+    if (!existsSync(join(dir, "job.json"))) throw new Error(`The record of job ${id} is gone; it is not started again`);
+  } else mkdirSync(dir, { recursive: true, mode: 0o700 });
+  closeSync(openSync(join(dir, "output.log"), prepared ? "r" : "a", 0o600));
   // An admitted deadline is immutable, even when a host dies before the runner claims it.
-  if (!existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
+  if (!prepared && !existsSync(join(dir, "job.json"))) writeOnce(join(dir, "job.json"), JSON.stringify({ id, command, description, cwd, sessionId, shell, args, timeout, startedAt, expiresAt: Number.isFinite(expiresAt) ? expiresAt : startedAt + (timeout ?? lifetimeSeconds) * 1000, ...(owned ? { owned, ownerExecutionId, progressLog, cleanupGraceMs } : {}), ...(fullAccess === true ? { fullAccess: true } : {}) }));
+  // `prepare`: only the record, for a caller that commits its own reference to the job before the runner starts.
+  if (prepare) return false;
   if (cancelled) {
     writeOnce(join(dir, "exit"), JSON.stringify({ cancelled: true, finishedAt: Date.now(), ...(owned ? { cleanup: { survivors: [] } } : {}) }));
     return false;
   }
   // --disable-sigusr1: no debugger a signal could open in this unfenced process (the fence also denies such signals).
   const runner = spawn(process.execPath, ["--disable-sigusr1", runnerPath, dir], { cwd: dir, detached: true, stdio: "ignore", env });
-  runner.once("error", (error) => writeOnce(join(dir, "exit"), JSON.stringify({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() })));
+  // A job folder removed meanwhile (a lost registry) has nowhere to record the failure, and nothing ran.
+  const settle = (result) => { try { writeOnce(join(dir, "exit"), JSON.stringify(result)); } catch (error) { if (error.code !== "ENOENT") throw error; } };
+  runner.once("error", (error) => settle({ error: `Runner could not start: ${String(error)}`, finishedAt: Date.now() }));
   runner.once("exit", () => {
     // No claim means no shell could have run. Never leave the blocking tool waiting on a dead pre-claim runner.
-    if (owned && !existsSync(join(dir, "claim"))) writeOnce(join(dir, "exit"), JSON.stringify({ error: "Runner ended before claiming the command; it was not run again", finishedAt: Date.now(), cleanup: { survivors: [] } }));
+    if (owned && !existsSync(join(dir, "claim"))) settle({ error: "Runner ended before claiming the command; it was not run again", finishedAt: Date.now(), cleanup: { survivors: [] } });
   });
   runner.unref();
   return true;
@@ -122,13 +152,15 @@ export function readJob(root, id) {
   if (record === undefined) return undefined;
   const logPath = join(dir, "output.log");
   const lastOutputAt = Math.max(record.startedAt, ...[logPath, ...(record.owned && record.progressLog ? [joinPath(record.cwd, record.progressLog)] : [])].map((path) => { try { const stat = statSync(path); return stat.size > 0 ? stat.mtimeMs : 0; } catch { return 0; } }));
+  // Sampled before the claim is read: a claim missing then and a deadline already past mean no runner may still start it.
+  const now = Date.now();
   const job = { id, expiresAt: record.expiresAt, lastOutputAt, ...(record.owned ? { owned: true } : {}), command: record.command, ...(typeof record.description === "string" && record.description.trim() !== "" ? { description: record.description } : {}), startedAt: record.startedAt, logPath, dir, bytes: fileSize(logPath), state: "running" };
   let result = readJson(join(dir, "exit"));
   const claim = readJson(join(dir, "claim"));
   if (result === undefined && claim === undefined) {
-    if (!record.owned || Date.now() < record.expiresAt) return { ...job, state: "pending" };
+    if (now < record.expiresAt) return { ...job, state: "pending" };
     // The launching host may have died before observing a pre-claim runner failure. Its committed expiry still wins.
-    writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), cleanup: { survivors: [] } }));
+    writeOnce(join(dir, "exit"), JSON.stringify({ error: `Timed out after ${record.timeout ?? Math.round((record.expiresAt - record.startedAt) / 1000)} seconds before launch; runner admission was not observed`, finishedAt: Date.now(), ...(record.owned ? { cleanup: { survivors: [] } } : {}) }));
     result = readJson(join(dir, "exit"));
   }
   if (result === undefined && !ownsProcess({ id, pgid: claim?.pid })) {

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { checkpointBarrier } from "../context-checkpoint/checkpoint-barrier.mjs";
-import { createBackgroundBashJobs } from "./jobs.mjs";
+import { completionContent, createBackgroundBashJobs, launchJob, readJob } from "./jobs.mjs";
+import { redact } from "../secret-redaction/redact.mjs";
 // Fenced commands write only in granted folders, never system temp: a test-owned PI_TMP under ~/.pi-workbench/tmp.
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
 mkdirSync(base, { recursive: true });
@@ -82,6 +83,99 @@ test("successful completions send only the last 20 lines while failures retain t
   assert.match(success, /Full output: .*output\.log/);
   assert.match(messages.find((m) => /exit 2/.test(m.message.content)).message.content, /line 0\n/);
   jobs.shutdown();
+});
+
+test("a success's 20-line cut never shows the body of a private key whose header it dropped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-key-"));
+  const logPath = join(dir, "output.log");
+  const body = Array.from({ length: 25 }, (_, i) => `KEYBODY${String(i).padStart(2, "0")}${"A".repeat(56)}`);
+  writeFileSync(logPath, ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", "done", ""].join("\n"));
+  const content = redact(completionContent({ id: "k", state: "complete", exitCode: 0, logPath, bytes: statSync(logPath).size }));
+  assert.doesNotMatch(content, /KEYBODY/);
+  assert.match(content, /done$/);
+});
+
+test("a completion never shows the body of a private key that never ends, also when the byte cut dropped its header", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-open-key-"));
+  for (const [lines, exitCode] of [[5, 0], [300, 1]]) {
+    const logPath = join(dir, `output-${lines}.log`);
+    writeFileSync(logPath, ["-----BEGIN PRIVATE KEY-----", ...Array.from({ length: lines }, (_, i) => `KEYBODY${String(i).padStart(3, "0")}${"A".repeat(56)}`), ""].join("\n"));
+    const content = redact(completionContent({ id: "k", state: "failed", exitCode, logPath, bytes: statSync(logPath).size }));
+    assert.doesNotMatch(content, /KEYBODY/, `${lines} lines`);
+  }
+});
+
+test("a byte cut through a key's opening or closing line masks the key and keeps the output after it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-background-bash-delimiter-"));
+  const BEGIN = "-----BEGIN PRIVATE KEY-----";
+  const END = "-----END PRIVATE KEY-----";
+  const pre = `${"p".repeat(999)}\n`;
+  // Cut 10 bytes into the opening line of a key that never ends: the tail is the last 12,000 bytes.
+  const opening = `${pre}${BEGIN}\nKEYBODY${"A".repeat(12_009 - BEGIN.length - 7)}`;
+  // Cut 5 bytes into the closing line, with a diagnostic at the end of the log.
+  const diag = "DIAG-AT-EOF\n";
+  const closing = `${pre}${BEGIN}\nKEYBODY${"A".repeat(56)}\n${END}\n${"z".repeat(12_000 - (END.length - 5) - 1 - diag.length - 1)}\n${diag}`;
+  // The tail starts exactly at the opening line of a key that never ends.
+  const exact = `${pre}${BEGIN}\nKEYBODY${"A".repeat(12_000 - BEGIN.length - 1 - 7)}`;
+  // The same, with terminal colour inside the header (stripped before redaction).
+  const COLOURED = "-----BEGIN \u001b[31mPRIVATE\u001b[0m KEY-----";
+  const coloured = `${pre}${COLOURED}\nKEYBODY${"A".repeat(12_000 - COLOURED.length - 1 - 7)}`;
+  // A 12,001-byte log whose cut falls just after the ESC of a leading colour code.
+  const ESC_CODE = "\u001b[38;2;255;128;0m";
+  // A marker at the body's end too: the miscounted cut kept only the last characters.
+  const insideCode = `${ESC_CODE}DIAG\n${BEGIN}\nKEYBODY${"A".repeat(12_001 - ESC_CODE.length - 5 - BEGIN.length - 1 - 15)}\nKEYBODY`;
+  for (const [name, text] of [["opening", opening], ["exact", exact], ["coloured", coloured], ["inside a code", insideCode], ["closing", closing]]) {
+    const logPath = join(dir, `${name}.log`);
+    writeFileSync(logPath, text);
+    const content = redact(completionContent({ id: "k", state: "failed", exitCode: 1, logPath, bytes: statSync(logPath).size }));
+    assert.doesNotMatch(content, /KEYBODY/, name);
+    if (name === "closing") assert.match(content, /DIAG-AT-EOF\n$/, "the output after the key stays");
+  }
+});
+
+test("starting a prepared job whose record is gone never makes it again or runs anything", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-prepared-"));
+  const marker = join(root, "ran");
+  const now = Date.now();
+  const job = { root, id: "lost", command: `touch ${marker}`, cwd, env: process.env, sessionId: "s1", startedAt: now, expiresAt: now + 60_000 };
+  launchJob({ ...job, prepare: true });
+  assert.equal(existsSync(join(root, "lost", "job.json")), true, "prepare writes the record");
+  assert.equal(existsSync(join(root, "lost", "claim")), false, "and starts no runner");
+  rmSync(join(root, "lost"), { recursive: true });
+  assert.throws(() => launchJob({ ...job, prepared: true }), /gone/);
+  assert.equal(existsSync(join(root, "lost")), false, "the record is not made again");
+  assert.equal(existsSync(marker), false);
+});
+
+test("the deadline reader never settles a job as unlaunched when its runner claimed it while the reader ran", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-race-"));
+  const now = Date.now();
+  mkdirSync(join(root, "raced"));
+  writeFileSync(join(root, "raced", "job.json"), JSON.stringify({ id: "raced", command: "x", cwd, sessionId: "s1", startedAt: now - 2000, expiresAt: now + 1000 }));
+  const realNow = Date.now;
+  let first = true;
+  // The first clock reading is where the runner claims the job and the deadline passes.
+  Date.now = () => {
+    if (first) { first = false; writeFileSync(join(root, "raced", "claim"), JSON.stringify({ pid: process.pid, at: now })); }
+    return now + 5000;
+  };
+  try { assert.doesNotMatch(readJob(root, "raced").error ?? "", /before launch/); }
+  finally { Date.now = realNow; }
+});
+
+test("a lead job never starts past its deadline, and an unclaimed one settles there", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-background-bash-late-"));
+  const marker = join(root, "ran");
+  const now = Date.now();
+  launchJob({ root, id: "late", command: `touch ${marker}`, cwd, env: process.env, sessionId: "s1", startedAt: now - 2000, expiresAt: now - 1000 });
+  await until(() => existsSync(join(root, "late", "exit")));
+  assert.equal(existsSync(marker), false, "the command never ran");
+  assert.match(readJob(root, "late").error, /before launch/);
+  mkdirSync(join(root, "unclaimed"));
+  writeFileSync(join(root, "unclaimed", "job.json"), JSON.stringify({ id: "unclaimed", command: "x", cwd, sessionId: "s1", startedAt: now - 2000, expiresAt: now - 1000 }));
+  const job = readJob(root, "unclaimed");
+  assert.equal(job.state, "failed");
+  assert.match(job.error, /Timed out after 1 seconds before launch/);
 });
 
 test("registry files are private", async () => {

@@ -17,7 +17,7 @@ function harness(mode = "rpc", child = false) {
   const pi = {
     registerTool: (tool) => tools.set(tool.name, tool),
     on: (name, handler) => handlers.set(name, handler),
-    events: { emit() {} },
+    events: { on() {}, emit() {} },
     // Like Pi, a delivered custom message starts and is acknowledged.
     sendMessage: (message) => { messages.push(message); handlers.get("message_start")?.({ message }); resolveCompletion(); },
   };

@@ -10,7 +10,6 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { type CompactionSettings, defineExtension, type Extension, section } from "@earendil-works/pi-durable";
 import { getDocsPath, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
-import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { claudeAliases, claudePayload, PiAuthStore } from "./claude.ts";
@@ -26,11 +25,14 @@ import { toolGroupsExtension } from "./tool-groups.ts";
 import { type PackageEvent, PiPackages } from "./packages.ts";
 import { builtinProviders, ENV_CREDENTIALS, type FastMode, fastMode, modelsJsonBaseUrl, refreshExpiredLogins, registeredProviders, subscriptionProviders, withBaseUrl, withStoredModels } from "./providers.ts";
 import { redact, wrapProvider } from "./redact.ts";
+import { fencedReader } from "./fenced-reader.ts";
 import { searchTools } from "./search-tools.ts";
 import { Atelier } from "./atelier.ts";
 import { SessionSpawner } from "./spawn-session.ts";
 import { ChatMessenger, homeWorkstream } from "./chat-message.ts";
+import { CACHE_RETENTION, idleCompaction, type IdleGate } from "./idle-compact.ts";
 import { BackgroundBash } from "./background-bash.ts";
+import { cheapWakeExtension, dropOverride, submitWake } from "./cheap-wake.ts";
 import { type Resources, type WorkbenchSignal, workbenchExtension } from "./workbench.ts";
 
 export const PREAMBLE = [
@@ -75,7 +77,7 @@ export function previewingEdit(edit = createEditTool()): typeof edit {
 }
 
 /** Prompt sections in Pi's order (preamble, addendum, project context, skills, cwd); resources come from PI WEB. */
-export function chatTools(resources: () => Resources, cwd: string) {
+export function chatTools(resources: () => Resources, cwd: string, bash?: BackgroundBash) {
 	return defineExtension({
 		name: "workbench.chat",
 		sections: [
@@ -88,7 +90,7 @@ export function chatTools(resources: () => Resources, cwd: string) {
 		// read has no external effect, so a crash mid-read may rerun it; write and edit stay unsafe (never rerun). bash is
 		// the Workbench one (background-bash.ts). grep/find/ls: Pi's own, offered only where an allowlist names them
 		// (children), as in legacy Chats.
-		tools: [{ ...createReadTool(), replay: "safe" as const }, createWriteTool(), previewingEdit(), ...searchTools(cwd)],
+		tools: [fencedReader({ ...createReadTool(), replay: "safe" as const }, bash), createWriteTool(), previewingEdit(), ...searchTools(cwd).map((tool) => fencedReader(tool, bash))],
 	});
 }
 
@@ -146,6 +148,8 @@ export type ChatHost = Host & {
 	readonly spawner: SessionSpawner;
 	/** send_chat_message's requests to PI WEB and their answers. */
 	readonly messenger: ChatMessenger;
+	/** The idle timer compaction's summary hook and what the session tells it (idle-compact.ts); without it no timer runs. */
+	readonly idle?: IdleGate;
 };
 
 /**
@@ -227,21 +231,22 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	const chatId = options.chatId ?? options.dir;
 	let opened: Host | undefined;
 	// The lead is the active branch: history navigation may select another.
-	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id });
+	const bash = new BackgroundBash({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, wake: (conversation, draft) => submitWake(conversation, draft, opened!.models) });
 	const atelier = new Atelier({ chatId, cwd: options.cwd, rootId: () => opened?.root.id, ...(options.release ? { release: options.release } : {}) });
 	const workbenchBash = bash.extension();
 	const spawner = new SessionSpawner(chatId);
 	const messenger = new ChatMessenger(chatId);
 	const sandbox = new CodemodeSandbox();
+	const idle = idleCompaction();
 	const agentDir = options.packages?.agentDir ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	// Like the packages: only a Chat that runs the user's Pi settings (PI WEB's `--packages`) reads them.
 	const inlineBudget = options.packages === undefined || options.readOnly === true ? undefined : codemodeInlineBudget(options.cwd, agentDir);
 	// Tool groups defer the group tools of every extension before them. The Workbench bash, installed after the core
 	// tools, replaces their bash.
 	const extensions: Extension[] = [
-		chatTools(() => workbench.resources, options.cwd),
+		chatTools(() => workbench.resources, options.cwd, bash),
 		workbenchExtension({ chatId, signal: (signal) => workbench.onSignal(signal) }),
-		workbenchExtensions(options.cwd),
+		workbenchExtensions(options.cwd, (path, cwd, conversationId) => bash.writeRefusal(path, cwd, conversationId)),
 		checkpointExtension(() => opened!.harness, { rootId: () => opened?.root.id, workstream: () => homeWorkstream(chatId) }),
 		delegationExtension({ chatId, dir: options.dir, harness: () => opened!.harness, record: (type, data) => workbench.record(type, data), leadOnly: [workbenchBash] }),
 		// Same runner, blocking API and a bounded lifetime for children; no async child scheduler.
@@ -251,6 +256,9 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		spawner.extension(),
 		messenger.extension(),
 		codemodeExtension(sandbox, inlineBudget),
+		cheapWakeExtension,
+		// The timer compaction's cheap summary; removing it makes those compactions summarize on the Chat's model.
+		idle.extension,
 	];
 	const workbench: ChatHost["workbench"] = { resources: {}, onSignal: () => {}, compaction: DEFAULT_COMPACTION, extensions, record: () => {} };
 	const aliases = claudeAliases("pi");
@@ -264,6 +272,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 				chatId,
 				agentDir,
 				scratch: join(options.dir, "pi-packages"),
+				monitorFullAccess: (caller) => bash.monitorFullAccess(caller),
 				emit: emitPackage,
 			});
 	const credentials = new PiAuthStore();
@@ -274,8 +283,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		provider: () => withBaseUrl(withStoredModels(anthropicProvider()), modelsJsonBaseUrl("anthropic")),
 		providerOptions: { onPayload: claudePayload(aliases), canonicalToolName: aliases.toCanonical },
 		credentials,
-		// Long prompt-cache retention: 1 h on Claude, the 30 min tier on Codex; an idle Chat resumes warm within it.
-		settings: { get compaction() { return workbench.compaction; }, stream: { cacheRetention: "long" } },
+		// The idle timer (idle-compact.ts) reads the same retention for the cache TTL.
+		settings: { get compaction() { return workbench.compaction; }, stream: { cacheRetention: CACHE_RETENTION } },
 		rootAgent: { model: parseModel(options.model), cwd: options.cwd, thinkingLevel: (options.thinkingLevel ?? "medium") as ModelThinkingLevel },
 		env: async (target, c) => {
 			const cwd = target.cwd ?? options.cwd;
@@ -284,7 +293,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 			const kind = (await target.read.snapshot(ChildDoc, target.conversationId, c))?.kind;
 			// The Chat's active branch is the Chat: its calls carry the Chat's own ID.
 			const identity = { chatId, conversationId: target.conversationId, rootId: opened?.root.id, cwd, ...(agent?.model === undefined ? {} : { model: agent.model }), ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }), ...(kind === undefined || kind === "lead" ? {} : { executionKind: kind }) };
-			return new NodeExecutionEnv({ cwd, shellEnv: toolEnv(identity) });
+			// Its file writes run inside the write fence of its commands (background-bash.ts `env`).
+			return bash.env({ cwd, shellEnv: toolEnv(identity) }, target.conversationId);
 		},
 		// Package tools keep their own deferral (web_enable); tool groups also gate the package groups (monitor), as in
 		// legacy Chats. Their wraps apply to the package extension installed after them.
@@ -309,6 +319,8 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 	}
 	// As Pi does on load: a stored level the model does not support is clamped (before anything is scheduled).
 	if (options.readOnly !== true) await applyModel(host);
+	// A cheap run a restart interrupted resumes on the stored model (rule: a restored run never keeps its override).
+	if (options.readOnly !== true) await dropOverride(host.root);
 	await packages?.start({
 		// The active branch at each use: history navigation may select another.
 		get root() { return host.root; },
@@ -338,6 +350,7 @@ export async function openChatHost(options: ChatHostOptions): Promise<ChatHost> 
 		atelier,
 		spawner,
 		messenger,
+		idle: idle.gate,
 		...(packages === undefined ? {} : { packages }),
 		listenPackages: (listener: (event: PackageEvent) => void) => {
 			chat.onPackageEvent = listener;

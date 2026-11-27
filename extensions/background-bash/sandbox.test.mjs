@@ -1,14 +1,15 @@
 // Write-fence tests on fake folders only: a fake HOME outside every temp folder, so the shared temp grant cannot
 // make a forbidden write look allowed. macOS only, like the fence.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { delimiter, dirname, join, sep } from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { launchJob, readJob } from "./jobs.mjs";
 import { plan } from "./host-ops.mjs";
-import { alreadyFenced, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, workstreamId } from "./sandbox.mjs";
+import { alreadyFenced, fencedEnv, fencedWrite, grants, ownedWorktrees, piWebPorts, piWebSockets, profile, toolPaths, workstreamId, writeError, writeRefusal } from "./sandbox.mjs";
 
 const skip = process.platform !== "darwin" ? "the write fence applies on macOS only" : alreadyFenced() && "already inside a fence, which these fake-folder checks cannot see past; run them from an unfenced shell";
 const base = process.env.PI_TMP ?? join(homedir(), ".pi-workbench", "tmp");
@@ -111,7 +112,12 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
     mkdirSync(join(home, dir), { recursive: true });
     writeFileSync(join(home, dir, "private.txt"), "private");
   }
-  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
+  const agent = join(home, ".pi", "agent");
+  mkdirSync(agent, { recursive: true });
+  const target = join(home, "synthetic-login");
+  writeFileSync(target, "{}");
+  symlinkSync(target, join(agent, "auth.json"));
+  const job = await run('for d in Desktop Documents Downloads Pictures Library/Containers; do cat "$HOME/$d/private.txt" >/dev/null 2>&1 && echo "READ $d"; ls "$HOME/$d" >/dev/null 2>&1 && echo "LISTED $d"; done; for p in "$HOME/.pi/agent/auth.json" "$HOME/synthetic-login"; do cat "$p" >/dev/null 2>&1 && echo "READ login"; done; ls "$HOME" >/dev/null && echo HOME_LISTED', { owned: true });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.doesNotMatch(out, /READ |LISTED /);
@@ -119,14 +125,14 @@ test("private folders and other apps' data cannot be read, so macOS never asks",
 });
 
 test("inside a fence the runner starts commands under the outer fence instead of failing", { skip: process.platform !== "darwin" && "macOS only" }, () => {
-  const out = execFileSync("/usr/bin/sandbox-exec", ["-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
+  const out = execFileSync("/usr/bin/sandbox-exec", ["-D", `AUTH=${join(userInfo().homedir, ".pi/agent/auth.json")}`, "-p", '(version 1)(allow default)(deny file-write*)(allow file-write* (subpath "/dev"))(deny file-read* (literal (param "AUTH")))', process.execPath, "--input-type=module", "-e", `import("${new URL("./sandbox.mjs", import.meta.url).href}").then(async (m) => console.log(m.alreadyFenced(), (await m.confine({ shell: "/bin/bash", args: ["-c"], command: "true", cwd: "/" })).file))`], { encoding: "utf8" });
   assert.equal(out.trim(), "true /bin/bash");
   assert.equal(alreadyFenced(), false, "this test process itself is unfenced");
 });
 
 test("grants: never home, ~/IdeaProjects, the scratch root or Pi's own state; a scratch folder counts once", () => {
   const h = "/Users/someone";
-  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches"));
+  const rules = (cwd, extra = {}) => grants({ cwd, home: h, ...extra }).write.filter((p) => !p.includes("sandbox-caches") && !p.endsWith("sandbox-runtime"));
   assert.deepEqual(rules(h), []);
   assert.deepEqual(rules(`${h}/IdeaProjects`), []);
   assert.deepEqual(rules(`${h}/.pi-workbench/scratch`), []);
@@ -180,7 +186,7 @@ for (const owned of [false, true]) {
   });
 }
 
-test("`wt switch --create` makes the sibling worktree outside the fence and records its owner; --execute and a repo outside ~/IdeaProjects are refused", { skip }, async () => {
+test("`wt switch --create` makes the `<repo>.worktrees/<branch>` worktree outside the fence (also from inside one) and records its owner; --execute and a repo outside ~/IdeaProjects are refused", { skip }, async () => {
   // Its own repo: the rm -rf test above empties the shared one's .git, as it may inside the grant.
   const tools = join(home, "IdeaProjects", "tools");
   mkdirSync(tools);
@@ -190,17 +196,19 @@ test("`wt switch --create` makes the sibling worktree outside the fence and reco
   const planted = join(piTmp, "planted");
   const job = await run([
     'wt switch --create made-by-host --no-cd; echo "exit=$?"',
+    `(cd "${join(home, "IdeaProjects", "tools.worktrees", "made-by-host")}" && wt switch --create nested --no-cd); echo "nested=$?"`,
     'wt switch --create other -x "touch $HOME/escaped"; echo "exit=$?"',
     `git init -q "${planted}" && printf '#!/bin/sh\ntouch "$HOME/escaped"\n' > "${planted}/hook" && chmod +x "${planted}/hook" && git -C "${planted}" config core.hooksPath "${planted}" && cd "${planted}" && wt switch --create from-planted; echo "exit=$?"`,
   ].join("; "), { cwd: tools, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
-  const tree = join(home, "IdeaProjects", "tools.made-by-host");
+  const tree = join(home, "IdeaProjects", "tools.worktrees", "made-by-host");
   assert.ok(existsSync(join(tree, ".git")), out);
+  assert.ok(out.includes("nested=0") && existsSync(join(home, "IdeaProjects", "tools.worktrees", "nested", ".git")), out);
   assert.match(out, /exit=0[\s\S]*-x is not available inside the sandbox[\s\S]*exit=2[\s\S]*run it inside a checkout under ~\/IdeaProjects[\s\S]*exit=2/);
-  const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-owner.json"), "utf8"));
+  const record = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "made-by-host", "pi-owner.json"), "utf8"));
   assert.deepEqual([record.branch, record.sessions], ["made-by-host", ["sandbox-test"]]);
-  const receipt = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "tools.made-by-host", "pi-creator.json"), "utf8"));
+  const receipt = JSON.parse(readFileSync(join(tools, ".git", "worktrees", "made-by-host", "pi-creator.json"), "utf8"));
   assert.deepEqual([receipt.branch, receipt.sessions, receipt.workstreams], ["made-by-host", ["sandbox-test"], []], "a creation receipt beside the cleanup record");
   assert.equal(existsSync(join(home, "owner-script-ran")), false, "no owner-record script ran");
   assert.equal(existsSync(join(home, "escaped")), false);
@@ -216,17 +224,74 @@ test("inside the sandbox the real wt runs only list, switch and config: removal,
   git(main, "worktree", "add", "-q", "-b", "done", done);
   const receipt = join(main, ".git", "worktrees", "rm.done", "pi-creator.json");
   writeFileSync(receipt, JSON.stringify({ branch: "done", sessions: ["sandbox-test"], workstreams: [] }));
-  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias", "help", "-y switch --create made --no-cd"];
-  const allowed = ["list", "-C . list", "--config=/dev/null switch other", "--version", "config"];
-  const job = await run([...refused.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, ...allowed.map((r) => `wt ${r}; echo "exit=$?"`)].join("; "), { cwd: main, env: withFakes });
+  const refused = ["remove done --foreground", "remove done --force -D", "-y remove done", "-C . remove done", "--config /dev/null -v remove done", "-yC . remove done", "merge", "merge --no-remove", "merge -- --no-remove", "step prune", "step promote", "hook pre-remove", "my_alias", "help", "-y switch --create made --no-cd", "switch --clobber other", "-y switch other --clobber"];
+  // What the real wt receives: a local switch always without hooks.
+  const allowed = { "list": "list", "-C . list": "-C . list", "--config=/dev/null switch other": "--config=/dev/null switch --no-hooks other", "--version": "--version", "config": "config" };
+  const job = await run([...refused.map((r) => `wt ${r}; echo "exit=$?"`), `cd "${done}" && PI_HOST_OPS= wt remove; echo "exit=$?"`, ...Object.keys(allowed).map((r) => `wt ${r}; echo "exit=$?"`)].join("; "), { cwd: main, env: withFakes });
   assert.equal(job.state, "complete", job.error);
   const out = readFileSync(job.logPath, "utf8");
   assert.equal(out.match(/is not available inside the sandbox[^\n]*\nexit=2/g)?.length, refused.length + 1, out);
   assert.match(out, /REAL_WT_RAN config\nwt remove: is not available inside the sandbox/, "a wt started by the real wt meets the shim too");
-  for (const r of allowed) assert.ok(out.includes(`REAL_WT_RAN ${r}\n`), r);
+  for (const r of Object.values(allowed)) assert.ok(out.includes(`REAL_WT_RAN ${r}\n`), r);
   assert.ok(existsSync(join(done, ".git")) && existsSync(receipt), "tree and receipt stay");
   assert.equal(git(main, "branch", "--list", "done", "--format=%(refname:short)").trim(), "done", "the branch stays");
-  assert.equal(out.match(/REAL_WT_RAN/g).length, allowed.length, "the real wt ran only the allowed commands");
+  assert.equal(out.match(/REAL_WT_RAN/g).length, Object.keys(allowed).length, "the real wt ran only the allowed commands");
+});
+
+// The shim alone, no fence needed (so it also runs inside one): two PATH folders each link `wt` to it.
+test("wt shim: refuses --clobber, runs a local switch without hooks, and finds the real wt by real path past every link to itself", () => {
+  const shim = join(dirname(fileURLToPath(import.meta.url)), "host-ops", "host-op.mjs");
+  const [a, b, realBin] = ["shim-a", "shim-b", "real-wt"].map((d) => mkdtempSync(join(root, `${d}-`)));
+  for (const d of [a, b]) symlinkSync(shim, join(d, "wt"));
+  writeFileSync(join(realBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
+  const wt = (...args) => spawnSync(join(a, "wt"), args, { encoding: "utf8", timeout: 10_000, env: { PATH: [a, b, realBin, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) } });
+  const local = wt("-y", "switch", "other");
+  assert.equal(local.stdout, "REAL_WT_RAN -y switch --no-hooks other\n", local.stderr || local.error?.message);
+  for (const args of [["switch", "--clobber", "x"], ["switch", "x", "--clobber=true"]]) {
+    const refused = wt(...args);
+    assert.equal(refused.status, 2, args.join(" "));
+    assert.match(refused.stderr, /--clobber: is not available inside the sandbox/);
+  }
+  // Without a runner a `switch --create` runs the real wt here, also without hooks.
+  assert.equal(wt("switch", "--create", "n").stdout, "REAL_WT_RAN switch --no-hooks --create n\n");
+  assert.equal(wt("list").stdout, "REAL_WT_RAN list\n");
+});
+
+// Same shim setup, one subtest per hardening so each fails on its own.
+test("wt shim: grouped short options, a repeated --no-hooks, options after `--`, a relative PATH entry and a folder named wt", async (t) => {
+  const shim = join(dirname(fileURLToPath(import.meta.url)), "host-ops", "host-op.mjs");
+  const [a, realBin, dot, folder] = ["shim-a", "real-wt", "dot-wt", "folder-wt"].map((d) => mkdtempSync(join(root, `${d}-`)));
+  symlinkSync(shim, join(a, "wt"));
+  writeFileSync(join(realBin, "wt"), '#!/bin/sh\necho "REAL_WT_RAN $*"\n', { mode: 0o755 });
+  writeFileSync(join(dot, "wt"), '#!/bin/sh\necho "DOT_WT $0 $*"\n', { mode: 0o755 });
+  mkdirSync(join(folder, "wt"));
+  const wt = (args, { path = [a, realBin], cwd, env = {} } = {}) => spawnSync(join(a, "wt"), args, { cwd, encoding: "utf8", timeout: 10_000, env: { ...env, PATH: [...path, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter) } });
+  await t.test("a short-option group could hide --create or --clobber: refused", () => {
+    for (const group of ["-yc", "-cy"]) {
+      const refused = wt(["switch", group, "n"]);
+      assert.equal(refused.status, 2, group);
+      assert.match(refused.stderr, /write each short option separately/);
+    }
+  });
+  await t.test("a value attached to -x is no group: both spellings run", () => {
+    for (const args of [["switch", "topic", "-xpwd"], ["switch", "topic", "-x", "pwd"]]) assert.equal(wt(args).stdout, `REAL_WT_RAN switch --no-hooks ${args.slice(1).join(" ")}\n`, args.join(" "));
+  });
+  await t.test("--no-hooks goes in once", () => {
+    assert.equal(wt(["switch", "--no-hooks", "other"]).stdout, "REAL_WT_RAN switch --no-hooks other\n");
+  });
+  await t.test("options end at `--`: --execute's arguments neither refuse nor forward", () => {
+    const args = ["switch", "other", "-x", "echo", "--", "--clobber", "--no-hooks", "-c"];
+    const ran = wt(args, { env: { PI_HOST_OPS: join(root, "no-runner.sock") } });
+    assert.equal(ran.stdout, `REAL_WT_RAN switch --no-hooks ${args.slice(1).join(" ")}\n`, ran.stderr);
+  });
+  await t.test("a relative PATH entry: the real wt runs by its absolute path, never a bare name the lookup could send to the shim", () => {
+    const ran = wt(["list"], { path: [".", a], cwd: dot });
+    assert.equal(ran.stdout, `DOT_WT ${join(realpathSync(dot), "wt")} list\n`, ran.stderr);
+  });
+  await t.test("only a regular file counts as the real wt, not a folder named wt", () => {
+    const ran = wt(["list"], { path: [folder, a, realBin] });
+    assert.equal(ran.stdout, "REAL_WT_RAN list\n", ran.stderr);
+  });
 });
 
 test("a chat in its scratch folder may write the worktrees whose creation receipt names it; a cleanup owner record grants nothing; it cannot forge one", { skip }, async () => {
@@ -291,20 +356,23 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
   const dataDir = mkdtempSync(join(tmpdir(), "pw-"));
   mkdirSync(join(dataDir, "hosts"));
   mkdirSync(join(dataDir, "elsewhere"));
+  // A host socket folder outside the data folder (PI_WEB_DURABLE_HOST_DIR), as the host announces it.
+  const hostDir = mkdtempSync(join(tmpdir(), "ph-"));
   const otherOps = join(userInfo().homedir, ".pi-workbench", "sandbox", "ops", `test-${process.pid}.sock`);
   mkdirSync(dirname(otherOps), { recursive: true });
   try {
     const web = await listen(0);
     await listen(join(dataDir, "hosts", "h.sock"));
     await listen(otherOps);
+    await listen(join(hostDir, "h.sock"));
     const free = await listen(0);
     const nc = (target) => `nc ${target} </dev/null 2>/dev/null | grep -q hello && echo REACHED || echo REFUSED`;
     // PI_WEB_DURABLE_HOST_DIR and PI_WEB_SESSIOND_SOCKET put host and daemon sockets outside the data dir.
     await listen(join(dataDir, "elsewhere", "h.sock"));
     await listen(join(dataDir, "sd.sock"));
-    const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir } });
+    const job = await run([nc(`-w2 127.0.0.1 ${web.address().port}`), nc(`-U -w2 "${join(dataDir, "hosts", "h.sock")}"`), nc(`-U -w2 "${otherOps}"`), nc(`-U -w2 "${join(hostDir, "h.sock")}"`), nc(`-w2 127.0.0.1 ${free.address().port}`)].join("; "), { env: { PI_WEB_PORT: String(web.address().port), PI_WEB_DATA_DIR: dataDir, PI_DURABLE_HOST_SOCKET_DIR: hostDir } });
     assert.equal(job.state, "complete", job.error);
-    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
+    assert.deepEqual(readFileSync(job.logPath, "utf8").trim().split("\n"), ["REFUSED", "REFUSED", "REFUSED", "REFUSED", "REACHED"], "only the unrelated port answers");
     // The overrides alone, with no PI_WEB_DATA_DIR naming their parent: still refused.
     const elsewhere = join(dataDir, "elsewhere", "h.sock");
     const overridden = await run([nc(`-U -w2 "${elsewhere}"`), nc(`-U -w2 "${join(dataDir, "sd.sock")}"`)].join("; "), { env: { PI_WEB_DURABLE_HOST_DIR: dirname(elsewhere), PI_WEB_SESSIOND_SOCKET: join(dataDir, "sd.sock") } });
@@ -314,6 +382,7 @@ test("fenced commands cannot reach PI WEB's port, its or the hosts' sockets, or 
     for (const server of servers) server.close();
     rmSync(otherOps, { force: true });
     rmSync(dataDir, { recursive: true, force: true });
+    rmSync(hostDir, { recursive: true, force: true });
   }
 });
 
@@ -338,7 +407,7 @@ test("the Seatbelt profile denies host files, while Durable stores and logs rema
   // Only host launch directories are read-denied; the durable folder (including stores and logs) is only a socket deny.
   assert.deepEqual(args.slice(0, 4), ["-D", "P0=/x/home/.pi-web-durable/hosts", "-D", "P1=/x/custom-hosts"]);
   assert.match(text, /\(deny network-outbound \(remote ip "\*:8504"\) \(remote ip "\*:9200"\)\)/);
-  assert.ok(text.includes('(deny file-read* (subpath (param "P0")) (subpath (param "P1")))'), text);
+  assert.ok(text.includes('(deny file-read* file-write-unlink file-link file-clone (subpath (param "P0")) (subpath (param "P1")))'), text);
   assert.ok(!text.includes('(deny file-read* (subpath (param "P2")))'), "the Durable store/log root is not hidden");
   assert.ok(text.includes('(deny network-outbound (remote unix-socket (subpath (param "P2"))))'), text);
   assert.ok(text.indexOf("(deny process-info* (target others))") < text.indexOf("(allow process-info* (target same-sandbox))"), text);
@@ -437,20 +506,117 @@ test("git history: commits, branch deletes and fetches work; the command cannot 
   assert.equal(git(hist, "for-each-ref", "--format=%(refname)", "refs/heads/fetched").trim(), "refs/heads/fetched");
 });
 
+// Runs inside a fence too: it only builds the environment, so pnpm 12's lock folder is checked even where the
+// fenced-run tests skip themselves.
+test("pnpm 12's lock folder: XDG_RUNTIME_DIR is one user-only folder outside the agent caches, never /tmp; only its contents are granted", () => {
+  const fake = mkdtempSync(join(root, "env-home-"));
+  const runtime = join(realpathSync(fake), ".pi-workbench", "sandbox-runtime");
+  const env = fencedEnv({ PATH: process.env.PATH, XDG_RUNTIME_DIR: "/tmp" }, fake, undefined);
+  assert.equal(env.XDG_RUNTIME_DIR, runtime);
+  assert.equal(statSync(runtime).mode & 0o777, 0o700);
+  assert.equal(fencedEnv({}, fake, undefined).XDG_RUNTIME_DIR, runtime, "every fenced job shares it");
+  // A mode loosened before the fence existed is reset; pnpm would otherwise fall back to /tmp and fail.
+  chmodSync(runtime, 0o777);
+  assert.equal(fencedEnv({}, fake, undefined).XDG_RUNTIME_DIR, runtime);
+  assert.equal(statSync(runtime).mode & 0o777, 0o700);
+  // Anything but a real folder is never handed out.
+  rmSync(runtime, { recursive: true });
+  symlinkSync(mkdtempSync(join(root, "elsewhere-")), runtime);
+  assert.equal(fencedEnv({ XDG_RUNTIME_DIR: "/tmp" }, fake, undefined).XDG_RUNTIME_DIR, undefined, "nor an inherited one");
+  const g = grants({ cwd: fake, home: fake });
+  assert.ok(g.write.includes(runtime) && g.locked.includes(runtime), "contents writable, the folder itself locked");
+});
+
+// Runs inside a fence too: it only computes the grants and resolves paths, on a fake home.
+test("file-edit tools: a path is writable exactly where the Chat's commands could write it", async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "edit-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(app, { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  const outside = mkdtempSync(join(root, "edit-outside-"));
+  symlinkSync(outside, join(app, "link-out"));
+  symlinkSync(join(app, "gone"), join(app, "dangling"));
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  mkdirSync(env.PI_TMP, { recursive: true });
+  const refusal = (path) => writeRefusal(path, { cwd: app, sessionId: "edit-test", env });
+  for (const path of ["src/new/file.ts", "@README.md", join(app, "link-out", "..", "x"), join(env.PI_TMP, "x")]) assert.equal(await refusal(path), undefined, path);
+  const refused = [join(fake, "elsewhere"), "~/elsewhere", "../app.other/x", "AGENTS.md", ".pi/settings.json", ".git/hooks/pre-commit", ".git/config", ".git/objects/ab/cdef", "link-out/x", "dangling", join(outside, "x")];
+  for (const path of refused) assert.match(await refusal(path) ?? "", /^Blocked: .* outside this Chat's write folders/, path);
+  // Review of fc1e881: every spelling a tool may make of the path; case and Unicode form as APFS sees them; a locked
+  // name that creating parent folders would make.
+  const reviewed = [pathToFileURL(join(outside, "x")).href, "@~/elsewhere", ".GIT/Config", "AGENTS.MD", ".git/commondir/x"];
+  const allowed = [];
+  for (const path of reviewed) if (!/^Blocked: /.test(await refusal(path) ?? "")) allowed.push(path);
+  assert.deepEqual(allowed, [], "each one refused");
+  assert.match(await writeRefusal(join(fake, "x"), { cwd: fake, sessionId: "edit-test", env }) ?? "", /^Blocked/, "a Chat in home writes only PI_TMP, like its commands");
+  assert.equal(await writeRefusal(join(env.PI_TMP, "y"), { cwd: fake, sessionId: "edit-test", env }), undefined);
+  // Astra re-check of 2604454: the path Durable writes (`@` stripped, spaces made plain) is among the approved ones.
+  assert.ok(toolPaths("@src/a\u00A0b.ts", { cwd: app, env }).includes(join(app, "src", "a b.ts")));
+  assert.ok(toolPaths("file:///x//file.txt", { cwd: app, env }).includes("/x/file.txt"), "normalized as Durable resolves it");
+  // Astra re-check of 97836da: codemode's OS-temp folders, written unfenced, are never a write or edit tool's target.
+  assert.match(await refusal(join(realpathSync(tmpdir()), "pi-codemode-x", "out.png")) ?? "", /^Blocked/);
+  // The helper's reason is the text after a message's last ": ", never a file name; only EPERM is the fence.
+  const cause = (stderr) => { const e = writeError(stderr, "/x", 1); return [e.code, /write fence/.test(e.message)]; };
+  assert.deepEqual(cause("sh: /a/Operation not permitted/f: Is a directory\n"), ["EISDIR", false]);
+  assert.deepEqual(cause("sh: /a/f: Permission denied\n"), ["EACCES", false]);
+  assert.deepEqual(cause("mkdir: /a/Is a directory: Operation not permitted\n"), ["EPERM", true]);
+  assert.deepEqual(cause(""), ["EIO", false]);
+});
+
+// D13: the approval (writeRefusal, before the tool runs) does not bind the write; the write itself runs in the fence.
+test("file-edit tools: a folder swapped for a link after the approval leads nowhere; an allowed write works; no sandbox writes nothing", { skip }, async () => {
+  const fake = realpathSync(mkdtempSync(join(root, "race-home-")));
+  const app = join(fake, "IdeaProjects", "app");
+  mkdirSync(join(app, "src"), { recursive: true });
+  execFileSync("git", ["init", "-q", app]);
+  writeFileSync(join(app, "src", "f.txt"), "inside");
+  const outside = realpathSync(mkdtempSync(join(root, "race-outside-")));
+  writeFileSync(join(outside, "f.txt"), "orig");
+  const env = { HOME: fake, PI_TMP: join(fake, ".pi-workbench", "tmp", "ws-x", "s"), PI_WORKBENCH_WORKSTREAM_DIR: join(fake, "workstreams") };
+  const at = { cwd: app, sessionId: "race-test", env };
+  const created = join(app, "src", "new.txt");
+  const edited = join(app, "src", "f.txt");
+  for (const path of [created, edited]) assert.equal(await writeRefusal(path, at), undefined, `approved: ${path}`);
+  // A background job's swap between approval and write.
+  rmSync(join(app, "src"), { recursive: true });
+  symlinkSync(outside, join(app, "src"));
+  await assert.rejects(fencedWrite(created, "new", at), /Blocked by the write fence/, "write");
+  await assert.rejects(fencedWrite(edited, "changed", at), /Blocked by the write fence/, "edit");
+  assert.equal(existsSync(join(outside, "new.txt")), false);
+  assert.equal(readFileSync(join(outside, "f.txt"), "utf8"), "orig");
+  // Allowed: parents made, content exact; git's objects stay out of reach.
+  await fencedWrite(join(app, "a", "b", "c.txt"), "ü\n", at);
+  assert.equal(readFileSync(join(app, "a", "b", "c.txt"), "utf8"), "ü\n");
+  await assert.rejects(fencedWrite(join(app, ".git", "objects", "ab", "cdef"), "x", at), /Blocked by the write fence/);
+  // Ordinary errors keep their cause; a cancel before the helper starts writes nothing.
+  await assert.rejects(fencedWrite(join(app, "a"), "x", at), (error) => error.code === "EISDIR" && !/write fence/.test(error.message));
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(fencedWrite(join(app, "late.txt"), "x", { ...at, signal: cancelled.signal }), { code: "ABORT_ERR" });
+  assert.equal(existsSync(join(app, "late.txt")), false);
+  await assert.rejects(fencedWrite(join(app, "none.txt"), "x", { ...at, env: { ...env, PI_SANDBOX_EXEC: join(fake, "missing") } }), /Sandbox unavailable/);
+  assert.equal(existsSync(join(app, "none.txt")), false);
+});
+
 test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's code caches stay untouched, the agents' own caches work", { skip }, async () => {
   const shared = mkdtempSync(join(tmpdir(), "fence-shared-"));
   mkdirSync(join(home, ".gradle", "caches", "modules-2"), { recursive: true });
   mkdirSync(join(home, ".npm"), { recursive: true });
   mkdirSync(join(home, "Library", "Caches", "ms-playwright"), { recursive: true });
   mkdirSync(join(home, ".cache"), { recursive: true });
+  mkdirSync(join(home, "Library", "pnpm", "store"), { recursive: true });
   try {
     const job = await run([
       'echo "tmp=$TMPDIR"', 'touch "${TMPDIR}t" && echo TMP_OK',
       'ln -sfn / "${TMPDIR%/}" 2>/dev/null && echo RELINKED || echo RELINK_DENIED',
       `touch "${join(shared, "x")}" 2>/dev/null && echo SHARED_WRITTEN || echo SHARED_DENIED`,
       'touch /private/tmp/fence-x-$$ 2>/dev/null && { rm -f /private/tmp/fence-x-$$; echo SLASHTMP_WRITTEN; } || echo SLASHTMP_DENIED',
-      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright Library/Caches .cache; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
+      'for c in .gradle/caches/modules-2 .npm Library/Caches/ms-playwright Library/Caches .cache Library/pnpm/store; do touch "$HOME/$c/x" 2>/dev/null && echo "WRITTEN $c" || echo "DENIED $c"; done',
       'mkdir -p "$GRADLE_USER_HOME" "$npm_config_cache" "$PLAYWRIGHT_BROWSERS_PATH" && echo AGENT_CACHES_OK',
+      // pnpm 12 locks its store in XDG_RUNTIME_DIR, only if just this user can write it (else /tmp, denied above).
+      'mkdir "$XDG_RUNTIME_DIR/pnpm-store-operation-locks" && echo "runtime=$XDG_RUNTIME_DIR $(stat -f %Lp "$XDG_RUNTIME_DIR")"',
+      'chmod 777 "$XDG_RUNTIME_DIR" 2>/dev/null && echo RUNTIME_CHMODDED || echo RUNTIME_CHMOD_DENIED',
+      'mv "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR.x" 2>/dev/null && echo RUNTIME_MOVED || echo RUNTIME_MOVE_DENIED',
       'echo "ro=$GRADLE_RO_DEP_CACHE"; echo "maven=$MAVEN_OPTS"',
     ].join("; "));
     assert.equal(job.state, "complete", job.error);
@@ -461,7 +627,22 @@ test("temp and caches: TMPDIR is the Chat's PI_TMP; shared temp and Thomas's cod
     assert.equal(realpathSync(link), realpathSync(piTmp));
     // In production 42 bytes under /Users/<name>, so sockets there fit (this fake home is too long to show it).
     assert.match(link, /\/\.pi-workbench\/t\/[0-9a-f]{12}$/);
-    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "AGENT_CACHES_OK", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
+    assert.deepEqual(lines.slice(1), ["TMP_OK", "RELINK_DENIED", "SHARED_DENIED", "SLASHTMP_DENIED", "DENIED .gradle/caches/modules-2", "DENIED .npm", "DENIED Library/Caches/ms-playwright", "DENIED Library/Caches", "DENIED .cache", "DENIED Library/pnpm/store", "AGENT_CACHES_OK", `runtime=${join(home, ".pi-workbench", "sandbox-runtime")} 700`, "RUNTIME_CHMOD_DENIED", "RUNTIME_MOVE_DENIED", `ro=${join(home, ".gradle", "caches")}`, `maven=-Dmaven.repo.local=${join(caches, "m2", "repository")}`]);
     assert.ok(existsSync(join(caches, "gradle")));
   } finally { rmSync(shared, { recursive: true, force: true }); }
+});
+
+test("the read policy includes the login's real target, fails closed on a broken link, and leaves the session store visible", () => {
+  const h = mkdtempSync(join(root, "read-policy-"));
+  const dir = join(h, ".pi", "agent");
+  mkdirSync(dir, { recursive: true });
+  const target = join(h, "fixture");
+  symlinkSync(target, join(dir, "auth.json"));
+  const policy = () => grants({ cwd: h, home: h }).hidden;
+  assert.throws(policy, { code: "ENOENT" });
+  writeFileSync(target, "{}");
+  const hidden = policy();
+  assert.ok(hidden.includes(realpathSync.native(target)));
+  assert.ok(hidden.includes(join(h, ".pi/agent/auth.json")));
+  assert.ok(!hidden.some((p) => join(h, ".pi-web-durable/durable/id/session.sqlite").startsWith(`${p}/`)));
 });

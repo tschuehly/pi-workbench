@@ -72,17 +72,22 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
 - **Agent caches:** `~/.pi-workbench/sandbox-caches`, through `GRADLE_USER_HOME` (with Thomas's jars read-only via
   `GRADLE_RO_DEP_CACHE`), `MAVEN_USER_HOME` and `-Dmaven.repo.local`, `npm_config_cache`, `pnpm_config_store_dir` and
   `PLAYWRIGHT_BROWSERS_PATH`, `pnpm_config_cache_dir`, `XDG_CACHE_HOME`, `PYTHONPYCACHEPREFIX`, `GOCACHE` and
-  `CLANG_MODULE_CACHE_PATH`; a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
+  `CLANG_MODULE_CACHE_PATH`, plus `XDG_RUNTIME_DIR` (`~/.pi-workbench/sandbox-runtime`, one 0700 folder the runner
+  makes and checks, where pnpm 12 keeps its store operation locks instead of the unwritable `/tmp`; fenced commands
+  write its contents but cannot replace it or change its mode); a tool without such a setting just does not cache inside the fence. Playwright's browsers are seeded once as an APFS clone of Thomas's; a first fenced build
   downloads its other dependencies again.
 - **Git history:** nothing in a granted `.git/objects` can be deleted, renamed or overwritten, except git's temporary,
   lock and keep files, and `objects/info/alternates` is locked (it would let the owner's next gc drop the history);
   commits, branches and fetches work, `git gc` and repack fail inside the fence.
-- **Unreadable:** Desktop, Documents, Downloads, Pictures and other apps' data, so macOS never asks.
+- **Reads:** commands and Durable’s `read`, `grep`, `find`, `ls` and edit preview can read project files and Durable
+  session databases. They cannot read `~/Desktop`, `~/Documents`, `~/Downloads`, `~/Pictures`, the `Containers`,
+  `Group Containers`, `Mail`, `Messages` and `Safari` folders in `~/Library`, or `~/.pi/agent/auth.json`, including
+  through symlinks. A nested Pi (including `scripts/pi-eval.mjs`) cannot use that login inside the fence.
 - **Unreachable:** PI WEB's port and the sockets in its data folder (they run `!` commands and prompts unfenced), other
   jobs' host-operation sockets, and Apple events.
 - **Host operations** (`host-ops.mjs`): shims first on the fenced PATH forward `workstreams` (no `@file` arguments) and
   `wt switch --create <branch> [--base <ref>]` to the job's runner, which runs them outside the fence with its own
-  environment; the worktree is created with git in the main checkout under `~/IdeaProjects`, and the runner writes its
+  environment; the worktree is created with git in `<repo>.worktrees/<branch>` beside the main checkout under `~/IdeaProjects`, and the runner writes its
   cleanup owner record (`pi-owner.json`) and its creation receipt (`pi-creator.json`: the creating chat and only the
   Workstream whose scratch folder it started in). Only the receipt grants access: the cleanup record accumulates owners
   (`mac-storage-workspaces --record-owner`), so it would let a chat adopt a worktree it did not create.
@@ -91,6 +96,10 @@ sandbox means the command does not start (`Sandbox unavailable: …; the command
   access does (the withdrawn removal host operation could be steered outside the fence).
 - **Full access:** a Durable Chat's `/full-access on` runs its lead's commands unfenced after the owner clicks Allow in
   a macOS dialog the host shows; Subagents stay fenced; it ends with `/full-access off` or when the host stops.
+- **File-edit tools:** a Durable Chat's `write` and `edit` calls meet the same fence before they run (`writeRefusal`,
+  bound in durable-pilot's `extensions.ts`): the grants its commands would get, links resolved, plus nothing inside a
+  `.git/objects` folder. `/full-access` lifts it for the lead as for its commands; a host already inside a fence leaves
+  its tools to the outer one.
 - A fenced command that starts Pi or this runner again runs under the outer fence (`alreadyFenced`).
 - **Known limit:** `swift build` fails inside the fence (it nests its own sandbox, writes `~/.swiftpm` and the
   per-user temp folder it gets from macOS, not `TMPDIR`); a Chat that builds Swift uses full access.
